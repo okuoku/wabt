@@ -315,6 +315,8 @@ set(WABT_LIBRARY_SRC
   src/interp/interp.cc
   src/interp/interp-disassemble.cc
   src/interp/interp-trace.cc
+
+  src/interp2/interp2.cc
 )
 
 add_library(wabt STATIC ${WABT_LIBRARY_SRC})
