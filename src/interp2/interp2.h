@@ -27,6 +27,7 @@
 #include "src/cast.h"
 #include "src/result.h"
 #include "src/string-view.h"
+#include "src/opcode.h"
 
 namespace wabt {
 namespace interp2 {
@@ -303,13 +304,18 @@ struct ElemDesc {
   InitExpr offset;
 };
 
-struct InstrStream {
-  using Opcode = u32;
-  using OpU8 = std::tuple<Opcode, u8>;
-  using OpU32 = std::tuple<Opcode, u32>;
-  using OpU64 = std::tuple<Opcode, u64>;
-  using OpV128 = std::tuple<Opcode, v128>;
-  using OpU32U32 = std::tuple<Opcode, u32, u32>;
+struct Istream {
+  using Offset = u32;
+  static const Offset kInvalidOffset = ~0;
+
+  void EmitAt(u32 addr, u32 value);
+  void Emit(u8);
+  void Emit(u32);
+  void Emit(v128);
+  void Emit(Opcode);
+  void EmitDropKeep(u32 drop, u32 keep);
+
+  Offset offset() const;
 
   Buffer data;
 };
@@ -326,7 +332,7 @@ struct ModuleDesc {
   std::vector<StartDesc> starts;
   std::vector<ElemDesc> elems;
   std::vector<DataDesc> datas;
-  InstrStream stream;
+  Istream istream;
 };
 
 //// Runtime ////
