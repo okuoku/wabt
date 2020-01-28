@@ -18,6 +18,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <cinttypes>
 
 #include "src/make-unique.h"
 
@@ -30,15 +31,11 @@ const char* GetName(Mutability mut) {
 }
 
 const char* GetName(ValueType type) {
-  static const char* kNames[] = {"i32",     "i64",    "f32",
-                                 "f64",     "v128",   "anyref",
-                                 "funcref", "exnref", "nullref"};
-  return kNames[int(type)];
+  return GetTypeName(type);
 }
 
 const char* GetName(ExternKind kind) {
-  static const char* kNames[] = {"func", "table", "memory", "global", "event"};
-  return kNames[int(kind)];
+  return GetKindName(kind);
 }
 
 //// Refs ////
@@ -49,19 +46,22 @@ const Ref Ref::Null{0};
 Result Match(const Limits& expected,
              const Limits& actual,
              std::string* out_msg) {
-  if (actual.min < expected.min) {
-    *out_msg = StringPrintf("actual size (%u) smaller than declared (%u)",
-                            actual.min, expected.min);
+  if (actual.initial < expected.initial) {
+    *out_msg = StringPrintf("actual size (%" PRIu64
+                            ") smaller than declared (%" PRIu64 ")",
+                            actual.initial, expected.initial);
     return Result::Error;
   }
 
   if (expected.has_max) {
     if (!actual.has_max) {
       *out_msg = StringPrintf(
-          "max size (unspecified) larger than declared (%u)", expected.max);
+          "max size (unspecified) larger than declared (%" PRIu64 ")",
+          expected.max);
       return Result::Error;
     } else if (actual.max > expected.max) {
-      *out_msg = StringPrintf("max size (%u) larger than declared (%u)",
+      *out_msg = StringPrintf("max size (%" PRIu64
+                              ") larger than declared (%" PRIu64 ")",
                               actual.max, expected.max);
       return Result::Error;
     }
@@ -158,8 +158,8 @@ Result Match(const EventType& expected,
 }
 
 //// Limits ////
-Result Limits::CanGrow(u32 old_size, u32 delta, u32* new_size) {
-  if (max >= delta && old_size < max - delta) {
+Result CanGrow(const Limits& limits, u32 old_size, u32 delta, u32* new_size) {
+  if (limits.max >= delta && old_size < limits.max - delta) {
     *new_size = old_size + delta;
     return Result::Ok;
   }
@@ -335,7 +335,7 @@ Result HostFunc::Call(Store& store,
 
 //// Table ////
 Table::Table(Store&, TableDesc desc) : Extern(skind), desc_(desc) {
-  elements_.resize(desc.type.limits.min);
+  elements_.resize(desc.type.limits.initial);
 }
 
 void Table::Mark(Store& store) {
@@ -378,7 +378,7 @@ Result Table::Grow(Store& store, u32 count, Ref ref) {
   size_t old_size = elements_.size();
   u32 new_size;
   if (store.HasValueType(ref, desc_.type.element) &&
-      desc_.type.limits.CanGrow(old_size, count, &new_size)) {
+      CanGrow(desc_.type.limits, old_size, count, &new_size)) {
     elements_.resize(new_size);
     Fill(store, old_size, ref, new_size - old_size);
     return Result::Ok;
@@ -433,7 +433,7 @@ Result Table::Copy(Store& store,
 Memory::Memory(class Store&, MemoryDesc desc)
     : Extern(skind),
       desc_(desc),
-      pages_(desc.type.limits.min) {
+      pages_(desc.type.limits.initial) {
   data_.resize(pages_ * WABT_PAGE_SIZE);
 }
 
@@ -447,7 +447,7 @@ Result Memory::Match(class Store& store,
 
 Result Memory::Grow(u32 count) {
   u32 new_pages;
-  if (desc_.type.limits.CanGrow(pages_, count, &new_pages)) {
+  if (CanGrow(desc_.type.limits, pages_, count, &new_pages)) {
     pages_ = new_pages;
     data_.resize(new_pages * WABT_PAGE_SIZE);
     return Result::Ok;

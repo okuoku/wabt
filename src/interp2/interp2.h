@@ -17,7 +17,6 @@
 #ifndef WABT_INTERP2_H_
 #define WABT_INTERP2_H_
 
-#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -25,9 +24,10 @@
 #include <vector>
 
 #include "src/cast.h"
+#include "src/common.h"
+#include "src/opcode.h"
 #include "src/result.h"
 #include "src/string-view.h"
-#include "src/opcode.h"
 
 namespace wabt {
 namespace interp2 {
@@ -48,22 +48,11 @@ using s64 = int64_t;
 using u64 = uint64_t;
 using f32 = float;
 using f64 = double;
-using v128 = std::array<u8, 16>;
+using v128 = ::v128;
 
 using Buffer = std::vector<u8>;
 
-enum class ValueType : u32 {
-  I32,
-  I64,
-  F32,
-  F64,
-  V128,
-  // References
-  Anyref,
-  Funcref,
-  Exnref,
-  Nullref
-};
+using ValueType = wabt::Type;
 using ValueTypes = std::vector<ValueType>;
 
 template <typename T> bool HasType(ValueType);
@@ -71,10 +60,10 @@ template <typename T> void RequireType(ValueType);
 bool IsReference(ValueType);
 bool TypesMatch(ValueType expected, ValueType actual);
 
-enum class ExternKind { Func, Table, Memory, Global, Event };
+using ExternKind = ExternalKind;
 enum class Mutability { Const, Var };
 enum class EventAttr { Exception };
-enum class SegmentMode { Passive, Active };
+using SegmentMode = SegmentKind;
 enum class ElemKind { RefNull, RefFunc };
 
 const char* GetName(Mutability);
@@ -131,16 +120,11 @@ using RefVec = std::vector<Ref>;
 
 //// Types ////
 
-struct Limits {
-  Result CanGrow(u32 old_size, u32 delta, u32* new_size);
-  friend Result Match(const Limits& expected,
-                      const Limits& actual,
-                      std::string* out_msg);
-
-  u32 min;
-  u32 max;
-  bool has_max;
-};
+using Limits = wabt::Limits;
+Result CanGrow(const Limits&, u32 old_size, u32 delta, u32* new_size);
+Result Match(const Limits& expected,
+             const Limits& actual,
+             std::string* out_msg);
 
 struct ExternType {
   virtual ~ExternType() {}
