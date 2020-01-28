@@ -29,17 +29,25 @@ inline bool FuncType::classof(const ExternType* type) {
   return type->kind == skind;
 }
 
+inline FuncType::FuncType(ValueTypes params, ValueTypes results)
+    : params(params), results(results) {}
+
 //// TableType ////
 // static
 inline bool TableType::classof(const ExternType* type) {
   return type->kind == skind;
 }
 
+inline TableType::TableType(ValueType element, Limits limits)
+    : element(element), limits(limits) {}
+
 //// MemoryType ////
 // static
 inline bool MemoryType::classof(const ExternType* type) {
   return type->kind == skind;
 }
+
+inline MemoryType::MemoryType(Limits limits) : limits(limits) {}
 
 //// GlobalType ////
 // static
@@ -53,7 +61,15 @@ inline bool EventType::classof(const ExternType* type) {
   return type->kind == skind;
 }
 
+inline GlobalType::GlobalType(ValueType type, Mutability mut)
+    : type(type), mut(mut) {}
+
 //// ImportType ////
+inline ImportType::ImportType(std::string module,
+                              std::string name,
+                              std::unique_ptr<ExternType> type)
+    : module(module), name(name), type(std::move(type)) {}
+
 inline ImportType::ImportType(const ImportType& other)
     : module(other.module), name(other.name), type(other.type->Clone()) {}
 
@@ -67,6 +83,10 @@ inline ImportType& ImportType::operator=(const ImportType& other) {
 }
 
 //// ExportType ////
+inline ExportType::ExportType(std::string name,
+                              std::unique_ptr<ExternType> type)
+    : name(name), type(std::move(type)) {}
+
 inline ExportType::ExportType(const ExportType& other)
     : name(other.name), type(other.type->Clone()) {}
 

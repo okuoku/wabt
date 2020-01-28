@@ -24,14 +24,22 @@
 namespace wabt {
 namespace interp2 {
 
-namespace {
+const char* GetName(Mutability mut) {
+  static const char* kNames[] = {"immutable", "mutable"};
+  return kNames[int(mut)];
+}
 
-const char* kMutableNames[] = {"immutable", "mutable"};
-const char* kTypeNames[] = {"i32",    "i64",     "f32",    "f64",    "v128",
-                            "anyref", "funcref", "exnref", "nullref"};
-const char* kExternKindName[] = {"func", "table", "memory", "global", "event"};
+const char* GetName(ValueType type) {
+  static const char* kNames[] = {"i32",     "i64",    "f32",
+                                 "f64",     "v128",   "anyref",
+                                 "funcref", "exnref", "nullref"};
+  return kNames[int(type)];
+}
 
-}  // namespace
+const char* GetName(ExternKind kind) {
+  static const char* kNames[] = {"func", "table", "memory", "global", "event"};
+  return kNames[int(kind)];
+}
 
 //// Refs ////
 // static
@@ -86,9 +94,9 @@ Result Match(const TableType& expected,
              const TableType& actual,
              std::string* out_msg) {
   if (expected.element != actual.element) {
-    *out_msg = StringPrintf(
-        "type mismatch in imported table, expected %s but got %s.",
-        kTypeNames[int(expected.element)], kTypeNames[int(actual.element)]);
+    *out_msg =
+        StringPrintf("type mismatch in imported table, expected %s but got %s.",
+                     GetName(expected.element), GetName(actual.element));
     return Result::Error;
   }
 
@@ -121,7 +129,7 @@ Result Match(const GlobalType& expected,
   if (actual.mut != expected.mut) {
     *out_msg = StringPrintf(
         "mutability mismatch in imported global, expected %s but got %s.",
-        kMutableNames[int(actual.mut)], kMutableNames[int(expected.mut)]);
+        GetName(actual.mut), GetName(expected.mut));
     return Result::Error;
   }
 
@@ -130,7 +138,7 @@ Result Match(const GlobalType& expected,
        !TypesMatch(expected.type, actual.type))) {
     *out_msg = StringPrintf(
         "type mismatch in imported global, expected %s but got %s.",
-        kTypeNames[int(expected.type)], kTypeNames[int(actual.type)]);
+        GetName(expected.type), GetName(actual.type));
     return Result::Error;
   }
 
@@ -255,8 +263,7 @@ Result Extern::MatchImpl(Store& store,
         store,
         StringPrintf("expected import \"%s.%s\" to have kind %s, not %s",
                      import_type.module.c_str(), import_type.name.c_str(),
-                     kExternKindName[int(import_type.type->kind)],
-                     kExternKindName[int(T::skind)]));
+                     GetName(import_type.type->kind), GetName(T::skind)));
     return Result::Error;
   }
 
@@ -274,9 +281,7 @@ Func::Func(ObjectKind kind, FuncType type) : Extern(kind), type_(type) {}
 
 //// DefinedFunc ////
 DefinedFunc::DefinedFunc(Store& store, Ref instance, FuncDesc desc)
-    : Func(skind, GetFuncType(store, instance, desc.type_index)),
-      instance_(instance),
-      desc_(desc) {}
+    : Func(skind, desc.type), instance_(instance), desc_(desc) {}
 
 void DefinedFunc::Mark(Store& store) {
   store.Mark(instance_);
@@ -302,14 +307,6 @@ Result DefinedFunc::Call(Store& store,
   }
   thread->CopyValues(store, type_.results, out_results);
   return Result::Ok;
-}
-
-FuncType DefinedFunc::GetFuncType(Store& store,
-                                  Ref instance,
-                                  Index type_index) {
-  RefPtr<Instance> inst{store, instance};
-  RefPtr<Module> mod{store, inst->module()};
-  return mod->desc().func_types[type_index];
 }
 
 //// HostFunc ////
@@ -628,10 +625,7 @@ RefPtr<Instance> Instance::Instantiate(Store& store,
   for (size_t i = 0; i < import_desc_count; ++i) {
     auto&& import_desc = mod->desc().imports[i];
     Ref extern_ref = imports[i];
-
-    RefPtr<Extern> extern_;
-    Result result = store.Get<Extern>(extern_ref, &extern_);
-    assert(result != Result::Error);
+    RefPtr<Extern> extern_{store, extern_ref};
     if (Failed(extern_->Match(store, import_desc.type, out_trap))) {
       return {};
     }

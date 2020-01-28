@@ -26,6 +26,7 @@
 
 #include "src/cast.h"
 #include "src/result.h"
+#include "src/string-view.h"
 
 namespace wabt {
 namespace interp2 {
@@ -74,6 +75,10 @@ enum class Mutability { Const, Var };
 enum class EventAttr { Exception };
 enum class SegmentMode { Passive, Active };
 enum class ElemKind { RefNull, RefFunc };
+
+const char* GetName(Mutability);
+const char* GetName(ValueType);
+const char* GetName(ExternKind);
 
 enum class ObjectKind {
   Null,
@@ -147,6 +152,8 @@ struct FuncType : ExternType {
   static const ExternKind skind = ExternKind::Func;
   static bool classof(const ExternType* type);
 
+  explicit FuncType(ValueTypes params, ValueTypes results);
+
   std::unique_ptr<ExternType> Clone() override;
 
   friend Result Match(const FuncType& expected,
@@ -160,6 +167,8 @@ struct FuncType : ExternType {
 struct TableType : ExternType {
   static const ExternKind skind = ExternKind::Table;
   static bool classof(const ExternType* type);
+
+  explicit TableType(ValueType, Limits);
 
   std::unique_ptr<ExternType> Clone() override;
 
@@ -175,6 +184,8 @@ struct MemoryType : ExternType {
   static const ExternKind skind = ExternKind::Memory;
   static bool classof(const ExternType* type);
 
+  explicit MemoryType(Limits);
+
   std::unique_ptr<ExternType> Clone() override;
 
   friend Result Match(const MemoryType& expected,
@@ -187,6 +198,8 @@ struct MemoryType : ExternType {
 struct GlobalType : ExternType {
   static const ExternKind skind = ExternKind::Global;
   static bool classof(const ExternType* type);
+
+  explicit GlobalType(ValueType, Mutability);
 
   std::unique_ptr<ExternType> Clone() override;
 
@@ -213,14 +226,19 @@ struct EventType : ExternType {
 };
 
 struct ImportType {
+  explicit ImportType(std::string module,
+                      std::string name,
+                      std::unique_ptr<ExternType>);
   ImportType(const ImportType&);
   ImportType& operator=(const ImportType&);
 
-  std::string module, name;
+  std::string module;
+  std::string name;
   std::unique_ptr<ExternType> type;
 };
 
 struct ExportType {
+  explicit ExportType(std::string name, std::unique_ptr<ExternType>);
   ExportType(const ExportType&);
   ExportType& operator=(const ExportType&);
 
@@ -235,7 +253,7 @@ struct ImportDesc {
 };
 
 struct FuncDesc {
-  Index type_index;
+  FuncType type;
   u32 code_offset;
 };
 
@@ -539,8 +557,6 @@ class DefinedFunc : public Func {
   friend Store;
   explicit DefinedFunc(Store&, Ref instance, FuncDesc);
   void Mark(Store&) override;
-
-  FuncType GetFuncType(Store&, Ref instance, Index type_index);
 
   Ref instance_;
   FuncDesc desc_;
