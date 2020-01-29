@@ -20,7 +20,6 @@
 #include <cstdint>
 #include <memory>
 #include <string>
-#include <tuple>
 #include <vector>
 
 #include "src/cast.h"
@@ -28,6 +27,8 @@
 #include "src/opcode.h"
 #include "src/result.h"
 #include "src/string-view.h"
+
+#include "src/interp2/istream.h"
 
 namespace wabt {
 namespace interp2 {
@@ -286,22 +287,6 @@ struct ElemDesc {
   SegmentMode mode;
   Index table_index;
   InitExpr offset;
-};
-
-struct Istream {
-  using Offset = u32;
-  static const Offset kInvalidOffset = ~0;
-
-  void EmitAt(u32 addr, u32 value);
-  void Emit(u8);
-  void Emit(u32);
-  void Emit(v128);
-  void Emit(Opcode);
-  void EmitDropKeep(u32 drop, u32 keep);
-
-  Offset offset() const;
-
-  Buffer data;
 };
 
 struct ModuleDesc {

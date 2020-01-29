@@ -317,6 +317,7 @@ set(WABT_LIBRARY_SRC
   src/interp/interp-trace.cc
 
   src/interp2/interp2.cc
+  src/interp2/istream.cc
   src/interp2/read-module.cc
 )
 
@@ -507,6 +508,8 @@ if (NOT EMSCRIPTEN)
       src/test-filenames.cc
       src/test-utf8.cc
       src/test-wast-parser.cc
+
+      src/interp2/test-interp2.cc
     )
     wabt_executable(
       NAME wabt-unittests
