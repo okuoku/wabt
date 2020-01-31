@@ -302,6 +302,8 @@ class BinaryReaderInterp : public BinaryReaderNop {
   std::vector<MemoryType> memory_types_;  // Includes imported and defined.
   std::vector<GlobalType> global_types_;  // Includes imported and defined.
   std::vector<EventType> event_types_;    // Includes imported and defined.
+
+  static const Index kMemoryIndex0 = 0;
 };
 
 void FixupMap::Clear() {
@@ -739,12 +741,13 @@ void BinaryReaderInterp::EmitBr(Index depth,
                                 Index keep_count) {
   istream_.EmitDropKeep(drop_count, keep_count);
   Istream::Offset offset = GetLabel(depth)->offset;
+  istream_.Emit(Opcode::Br);
   if (offset == Istream::kInvalidOffset) {
     // depth_fixups_ stores the depth counting up from zero, where zero is the
     // top-level function scope.
-    depth_fixups_.Append(label_stack_.size() - 1 - depth, istream_.offset());
+    depth_fixups_.Append(label_stack_.size() - 1 - depth, istream_.end());
   }
-  istream_.Emit(Opcode::Br, offset);
+  istream_.Emit(offset);
 }
 
 void BinaryReaderInterp::FixupTopLabel() {
@@ -755,7 +758,7 @@ u32 BinaryReaderInterp::GetFuncOffset(Index func_index) {
   assert(func_index >= num_func_imports());
   FuncDesc& func = module_.funcs[func_index - num_func_imports()];
   if (func.code_offset == Istream::kInvalidOffset) {
-    func_fixups_.Append(func_index, istream_.offset());
+    func_fixups_.Append(func_index, istream_.end());
   }
   return func.code_offset;
 }
@@ -816,7 +819,7 @@ void BinaryReaderInterp::GetBlockSignature(Type sig_type,
 Result BinaryReaderInterp::BeginFunctionBody(Index index, Offset size) {
   Index defined_index = index - num_func_imports();
   func_ = &module_.funcs[defined_index];
-  func_->code_offset = istream_.offset();
+  func_->code_offset = istream_.end();
 
   depth_fixups_.Clear();
   label_stack_.clear();
@@ -865,7 +868,7 @@ Result BinaryReaderInterp::OnLocalDecl(Index decl_index,
 }
 
 Result BinaryReaderInterp::CheckHasMemory(Opcode opcode) {
-  if (module_.memories.empty()) {
+  if (memory_types_.empty()) {
     PrintError("%s requires an imported or defined memory.", opcode.GetName());
     return Result::Error;
   }
@@ -873,7 +876,7 @@ Result BinaryReaderInterp::CheckHasMemory(Opcode opcode) {
 }
 
 Result BinaryReaderInterp::CheckHasTable(Opcode opcode) {
-  if (module_.tables.empty()) {
+  if (table_types_.empty()) {
     PrintError("%s requires an imported or defined table.", opcode.GetName());
     return Result::Error;
   }
@@ -1009,7 +1012,7 @@ Result BinaryReaderInterp::OnLoopExpr(Type sig_type) {
   TypeVector param_types, result_types;
   GetBlockSignature(sig_type, &param_types, &result_types);
   CHECK_RESULT(typechecker_.OnLoop(param_types, result_types));
-  PushLabel(istream_.offset());
+  PushLabel(istream_.end());
   return Result::Ok;
 }
 
@@ -1089,8 +1092,7 @@ Result BinaryReaderInterp::OnCallExpr(Index func_index) {
   CHECK_RESULT(typechecker_.OnCall(func_type.params, func_type.results));
 
   if (func_index >= num_func_imports()) {
-    // TODO: is func offset necessary here?
-    istream_.Emit(Opcode::Call, func_index, GetFuncOffset(func_index));
+    istream_.Emit(Opcode::Call, func_index);
   } else {
     // TODO: rename CallImport
     istream_.Emit(Opcode::InterpCallHost, func_index);
@@ -1255,7 +1257,7 @@ Result BinaryReaderInterp::OnLoadExpr(Opcode opcode,
   CHECK_RESULT(CheckHasMemory(opcode));
   CHECK_RESULT(CheckAlign(alignment_log2, opcode.GetMemorySize()));
   CHECK_RESULT(typechecker_.OnLoad(opcode));
-  istream_.Emit(opcode, offset);
+  istream_.Emit(opcode, kMemoryIndex0, offset);
   return Result::Ok;
 }
 
@@ -1265,21 +1267,21 @@ Result BinaryReaderInterp::OnStoreExpr(Opcode opcode,
   CHECK_RESULT(CheckHasMemory(opcode));
   CHECK_RESULT(CheckAlign(alignment_log2, opcode.GetMemorySize()));
   CHECK_RESULT(typechecker_.OnStore(opcode));
-  istream_.Emit(opcode, offset);
+  istream_.Emit(opcode, kMemoryIndex0, offset);
   return Result::Ok;
 }
 
 Result BinaryReaderInterp::OnMemoryGrowExpr() {
   CHECK_RESULT(CheckHasMemory(Opcode::MemoryGrow));
   CHECK_RESULT(typechecker_.OnMemoryGrow());
-  istream_.Emit(Opcode::MemoryGrow);
+  istream_.Emit(Opcode::MemoryGrow, kMemoryIndex0);
   return Result::Ok;
 }
 
 Result BinaryReaderInterp::OnMemorySizeExpr() {
   CHECK_RESULT(CheckHasMemory(Opcode::MemorySize));
   CHECK_RESULT(typechecker_.OnMemorySize());
-  istream_.Emit(Opcode::MemorySize);
+  istream_.Emit(Opcode::MemorySize, kMemoryIndex0);
   return Result::Ok;
 }
 
@@ -1352,7 +1354,7 @@ Result BinaryReaderInterp::OnAtomicWaitExpr(Opcode opcode,
   CHECK_RESULT(CheckHasMemory(opcode));
   CHECK_RESULT(CheckAtomicAlign(alignment_log2, opcode.GetMemorySize()));
   CHECK_RESULT(typechecker_.OnAtomicWait(opcode));
-  istream_.Emit(opcode, offset);
+  istream_.Emit(opcode, kMemoryIndex0, offset);
   return Result::Ok;
 }
 
@@ -1362,14 +1364,14 @@ Result BinaryReaderInterp::OnAtomicNotifyExpr(Opcode opcode,
   CHECK_RESULT(CheckHasMemory(opcode));
   CHECK_RESULT(CheckAtomicAlign(alignment_log2, opcode.GetMemorySize()));
   CHECK_RESULT(typechecker_.OnAtomicNotify(opcode));
-  istream_.Emit(opcode, offset);
+  istream_.Emit(opcode, kMemoryIndex0, offset);
   return Result::Ok;
 }
 
 Result BinaryReaderInterp::OnMemoryCopyExpr() {
   CHECK_RESULT(CheckHasMemory(Opcode::MemoryCopy));
   CHECK_RESULT(typechecker_.OnMemoryCopy());
-  istream_.Emit(Opcode::MemoryCopy);
+  istream_.Emit(Opcode::MemoryCopy, kMemoryIndex0, kMemoryIndex0);
   return Result::Ok;
 }
 
@@ -1383,7 +1385,7 @@ Result BinaryReaderInterp::OnDataDropExpr(Index segment_index) {
 Result BinaryReaderInterp::OnMemoryFillExpr() {
   CHECK_RESULT(CheckHasMemory(Opcode::MemoryFill));
   CHECK_RESULT(typechecker_.OnMemoryFill());
-  istream_.Emit(Opcode::MemoryFill);
+  istream_.Emit(Opcode::MemoryFill, kMemoryIndex0);
   return Result::Ok;
 }
 
@@ -1391,7 +1393,7 @@ Result BinaryReaderInterp::OnMemoryInitExpr(Index segment_index) {
   CHECK_RESULT(CheckHasMemory(Opcode::MemoryInit));
   CHECK_RESULT(CheckDataSegment(segment_index));
   CHECK_RESULT(typechecker_.OnMemoryInit(segment_index));
-  istream_.Emit(Opcode::MemoryInit, segment_index);
+  istream_.Emit(Opcode::MemoryInit, kMemoryIndex0, segment_index);
   return Result::Ok;
 }
 

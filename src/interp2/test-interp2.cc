@@ -34,7 +34,8 @@ TEST(ReadModule, Empty) {
   ModuleDesc module;
   Result result =
       ReadModule(data.data(), data.size(), options, &errors, &module);
-  EXPECT_EQ(Result::Ok, result);
+  ASSERT_EQ(Result::Ok, result)
+      << FormatErrorsToString(errors, Location::Type::Binary);
 }
 
 TEST(ReadModule, MVP) {
@@ -71,7 +72,7 @@ TEST(ReadModule, MVP) {
   ModuleDesc module;
   Result result =
       ReadModule(data.data(), data.size(), options, &errors, &module);
-  EXPECT_EQ(Result::Ok, result)
+  ASSERT_EQ(Result::Ok, result)
       << FormatErrorsToString(errors, Location::Type::Binary);
 
   EXPECT_EQ(3u, module.func_types.size());
@@ -85,4 +86,63 @@ TEST(ReadModule, MVP) {
   EXPECT_EQ(1u, module.starts.size());
   EXPECT_EQ(1u, module.elems.size());
   EXPECT_EQ(1u, module.datas.size());
+}
+
+TEST(ReadModule, Disassemble) {
+  // (func $fac (param $n i32) (result i32)
+  //   (local $result i32)
+  //   (local.set $result (i32.const 1))
+  //   (loop (result i32)
+  //     (local.set $result
+  //       (i32.mul
+  //         (br_if 1 (local.get $result) (i32.eqz (local.get $n)))
+  //         (local.get $n)))
+  //     (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+  //     (br 0)))
+  std::vector<u8> data = {
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60,
+      0x01, 0x7f, 0x01, 0x7f, 0x03, 0x02, 0x01, 0x00, 0x0a, 0x22, 0x01, 0x20,
+      0x01, 0x01, 0x7f, 0x41, 0x01, 0x21, 0x01, 0x03, 0x7f, 0x20, 0x01, 0x20,
+      0x00, 0x45, 0x0d, 0x01, 0x20, 0x00, 0x6c, 0x21, 0x01, 0x20, 0x00, 0x41,
+      0x01, 0x6b, 0x21, 0x00, 0x0c, 0x00, 0x0b, 0x0b,
+  };
+
+  Errors errors;
+  ReadBinaryOptions options;
+  ModuleDesc module;
+  Result result =
+      ReadModule(data.data(), data.size(), options, &errors, &module);
+  ASSERT_EQ(Result::Ok, result)
+      << FormatErrorsToString(errors, Location::Type::Binary);
+
+  MemoryStream stream;
+  module.istream.Disassemble(&stream);
+
+  const size_t expected_size = 367;
+  auto buf = stream.ReleaseOutputBuffer();
+  ASSERT_EQ(expected_size, buf->size());
+
+  char str[expected_size];
+  memcpy(str, buf->data.data(), sizeof(str));
+
+  EXPECT_STREQ(str,
+R"(   0| alloca 1
+   6| i32.const 1
+  12| local.set $1, %[-1]
+  18| local.get $1
+  24| local.get $3
+  30| i32.eqz %[-1]
+  32| br_unless @44, %[-1]
+  38| br @84
+  44| local.get $3
+  50| i32.mul %[-2], %[-1]
+  52| local.set $1, %[-1]
+  58| local.get $2
+  64| i32.const 1
+  70| i32.sub %[-2], %[-1]
+  72| local.set $2, %[-1]
+  78| br @18
+  84| drop_keep $2 $1
+  94| return
+)");
 }
