@@ -115,6 +115,9 @@ struct Ref {
   Ref() = default;
   explicit Ref(size_t index);
 
+  friend bool operator==(Ref, Ref);
+  friend bool operator!=(Ref, Ref);
+
   size_t index;
 };
 using RefVec = std::vector<Ref>;
@@ -128,6 +131,7 @@ Result Match(const Limits& expected,
              std::string* out_msg);
 
 struct ExternType {
+  explicit ExternType(ExternKind);
   virtual ~ExternType() {}
   virtual std::unique_ptr<ExternType> Clone() = 0;
 
@@ -200,6 +204,8 @@ struct GlobalType : ExternType {
 struct EventType : ExternType {
   static const ExternKind skind = ExternKind::Event;
   static bool classof(const ExternType* type);
+
+  explicit EventType(EventAttr, const ValueTypes&);
 
   std::unique_ptr<ExternType> Clone() override;
 

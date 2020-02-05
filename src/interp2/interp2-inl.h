@@ -23,6 +23,17 @@ namespace interp2 {
 //// Ref ////
 inline Ref::Ref(size_t index) : index(index) {}
 
+inline bool operator==(Ref lhs, Ref rhs) {
+  return lhs.index == rhs.index;
+}
+
+inline bool operator!=(Ref lhs, Ref rhs) {
+  return lhs.index != rhs.index;
+}
+
+//// ExternType ////
+inline ExternType::ExternType(ExternKind kind) : kind(kind) {}
+
 //// FuncType ////
 // static
 inline bool FuncType::classof(const ExternType* type) {
@@ -30,7 +41,7 @@ inline bool FuncType::classof(const ExternType* type) {
 }
 
 inline FuncType::FuncType(ValueTypes params, ValueTypes results)
-    : params(params), results(results) {}
+    : ExternType(ExternKind::Func), params(params), results(results) {}
 
 //// TableType ////
 // static
@@ -39,7 +50,7 @@ inline bool TableType::classof(const ExternType* type) {
 }
 
 inline TableType::TableType(ValueType element, Limits limits)
-    : element(element), limits(limits) {}
+    : ExternType(ExternKind::Table), element(element), limits(limits) {}
 
 //// MemoryType ////
 // static
@@ -47,7 +58,8 @@ inline bool MemoryType::classof(const ExternType* type) {
   return type->kind == skind;
 }
 
-inline MemoryType::MemoryType(Limits limits) : limits(limits) {}
+inline MemoryType::MemoryType(Limits limits)
+    : ExternType(ExternKind::Memory), limits(limits) {}
 
 //// GlobalType ////
 // static
@@ -55,14 +67,17 @@ inline bool GlobalType::classof(const ExternType* type) {
   return type->kind == skind;
 }
 
+inline GlobalType::GlobalType(ValueType type, Mutability mut)
+    : ExternType(ExternKind::Global), type(type), mut(mut) {}
+
 //// EventType ////
 // static
 inline bool EventType::classof(const ExternType* type) {
   return type->kind == skind;
 }
 
-inline GlobalType::GlobalType(ValueType type, Mutability mut)
-    : type(type), mut(mut) {}
+inline EventType::EventType(EventAttr attr, const ValueTypes& signature)
+    : ExternType(ExternKind::Event), attr(attr), signature(signature) {}
 
 //// ImportType ////
 inline ImportType::ImportType(std::string module,
