@@ -817,16 +817,6 @@ RunResult Thread::PopCall() {
   return RunResult::Ok;
 }
 
-RunResult Thread::DoCall(const Func::Ptr& func, Trap::Ptr* out_trap) {
-  if (auto* host_func = dyn_cast<HostFunc>(func.get())) {
-    // TODO
-  } else {
-    auto* defined_func = cast<DefinedFunc>(func.get());
-    PushCall(defined_func->self(), defined_func->desc().code_offset);
-  }
-  return RunResult::Ok;
-}
-
 RunResult Thread::DoReturnCall(const Func::Ptr& func, Trap::Ptr* out_trap) {
   // TODO
   return RunResult::Ok;
@@ -915,249 +905,6 @@ void Thread::Push(Ref ref) {
     return TRAP(msg);          \
   }
 #define TRAP_UNLESS(cond, msg) TRAP_IF(!(cond), msg)
-
-template <typename R, typename T>
-RunResult Thread::DoUnop(UnopFunc<R, T> f) {
-  Push<T>(f(Pop<T>()));
-  return RunResult::Ok;
-}
-
-template <typename R, typename T>
-RunResult Thread::DoUnop(Store& store,
-                         UnopTrapFunc<R, T> f,
-                         Trap::Ptr* out_trap) {
-  T out;
-  std::string msg;
-  TRAP_IF(f(Pop<T>(), &out, &msg) == RunResult::Trap, msg);
-  Push<T>(out);
-  return RunResult::Ok;
-}
-
-template <typename R, typename T>
-RunResult Thread::DoBinop(BinopFunc<R, T> f) {
-  auto rhs = Pop<T>();
-  auto lhs = Pop<T>();
-  Push<T>(f(lhs, rhs));
-  return RunResult::Ok;
-}
-
-template <typename R, typename T>
-RunResult Thread::DoBinop(Store& store,
-                          BinopTrapFunc<R, T> f,
-                          Trap::Ptr* out_trap) {
-  auto rhs = Pop<T>();
-  auto lhs = Pop<T>();
-  T out;
-  std::string msg;
-  TRAP_IF(f(lhs, rhs, &out, &msg) == RunResult::Trap, msg);
-  Push<T>(out);
-  return RunResult::Ok;
-}
-
-template <typename R, typename T> bool CanConvert(T val) { return true; }
-template <> bool CanConvert<s32, f32>(f32 val) { return val >= -2147483648.f && val < 2147483648.f; }
-template <> bool CanConvert<s32, f64>(f64 val) { return val >= -2147483648. && val <= 2147483647.; }
-template <> bool CanConvert<u32, f32>(f32 val) { return val > -1.f && val <= 4294967296.f; }
-template <> bool CanConvert<u32, f64>(f64 val) { return val > -1. && val <= 4294967295.; }
-template <> bool CanConvert<s64, f32>(f32 val) { return val >= -9223372036854775808.f && val < 9223372036854775808.f; }
-template <> bool CanConvert<s64, f64>(f64 val) { return val >= -9223372036854775808. && val < 9223372036854775808.; }
-template <> bool CanConvert<u64, f32>(f32 val) { return val > -1.f && val < 18446744073709551616.f; }
-template <> bool CanConvert<u64, f64>(f64 val) { return val > -1. && val < 18446744073709551616.; }
-
-template <typename R, typename T>
-RunResult Thread::DoConvert(Store& store, Trap::Ptr* out_trap) {
-  auto val = Pop<T>();
-  TRAP_UNLESS(CanConvert<R>(val), "integer overflow");
-  Push<R>(static_cast<R>(val));
-  return RunResult::Ok;
-}
-
-template <typename R, typename T>
-RunResult Thread::DoReinterpret() {
-  Push(Bitcast<R>(Pop<T>()));
-  return RunResult::Ok;
-}
-
-template <typename R, typename T>
-R IntTruncSat(T val) {
-  if (WABT_UNLIKELY(std::isnan(val))) {
-    return 0;
-  } else if (WABT_UNLIKELY(!CanConvert<R>(val))) {
-    return std::signbit(val) ? std::numeric_limits<R>::min()
-                             : std::numeric_limits<R>::max();
-  } else {
-    return static_cast<R>(val);
-  }
-}
-
-template <typename T, typename V>
-RunResult Thread::DoLoad(Store& store,
-                         Instance::Ptr& inst,
-                         Instr instr,
-                         Trap::Ptr* out_trap) {
-  Memory::Ptr memory{store, inst->memories()[instr.imm_u32x2.fst]};
-  u32 offset = Pop<u32>();
-  V val;
-  TRAP_IF(Failed(memory->Load(offset, instr.imm_u32x2.snd, &val)),
-          StringPrintf("access at %u+%u >= max value %u", offset,
-                       instr.imm_u32x2.snd, memory->ByteSize()));
-  Push(static_cast<T>(val));
-  return RunResult::Ok;
-}
-
-template <typename T, typename V>
-RunResult Thread::DoStore(Store& store,
-                          Instance::Ptr& inst,
-                          Instr instr,
-                          Trap::Ptr* out_trap) {
-  Memory::Ptr memory{store, inst->memories()[instr.imm_u32x2.fst]};
-  u32 offset = Pop<u32>();
-  T val = static_cast<T>(Pop<V>());
-  TRAP_IF(Failed(memory->Store(offset, instr.imm_u32x2.snd, val)),
-          StringPrintf("access at %u+%u >= max value %u", offset,
-                       instr.imm_u32x2.snd, memory->ByteSize()));
-  return RunResult::Ok;
-}
-
-RunResult Thread::DoMemoryInit(Store& store,
-                               Instance::Ptr& inst,
-                               Instr instr,
-                               Trap::Ptr* out_trap) {
-  Memory::Ptr memory{store, inst->memories()[instr.imm_u32x2.fst]};
-  auto&& data = inst->datas()[instr.imm_u32x2.snd];
-  auto size = Pop<u32>();
-  auto src = Pop<u32>();
-  auto dst = Pop<u32>();
-  TRAP_IF(Failed(memory->Init(dst, data, src, size)),
-          "memory.init out of bounds");
-  return RunResult::Ok;
-}
-
-RunResult Thread::DoDataDrop(Instance::Ptr& inst, Instr instr) {
-  inst->datas()[instr.imm_u32].Drop();
-  return RunResult::Ok;
-}
-
-RunResult Thread::DoMemoryCopy(Store& store,
-                               Instance::Ptr& inst,
-                               Instr instr,
-                               Trap::Ptr* out_trap) {
-  Memory::Ptr mem_dst{store, inst->memories()[instr.imm_u32x2.fst]};
-  Memory::Ptr mem_src{store, inst->memories()[instr.imm_u32x2.snd]};
-  auto size = Pop<u32>();
-  auto src = Pop<u32>();
-  auto dst = Pop<u32>();
-  TRAP_IF(Failed(Memory::Copy(*mem_dst, dst, *mem_src, src, size)),
-          "memory.copy out of bounds");
-  return RunResult::Ok;
-}
-
-RunResult Thread::DoMemoryFill(Store& store,
-                               Instance::Ptr& inst,
-                               Instr instr,
-                               Trap::Ptr* out_trap) {
-  Memory::Ptr memory{store, inst->memories()[instr.imm_u32]};
-  auto size = Pop<u32>();
-  auto value = Pop<u32>();
-  auto dst = Pop<u32>();
-  TRAP_IF(Failed(memory->Fill(dst, value, size)), "memory.fill out of bounds");
-  return RunResult::Ok;
-}
-
-RunResult Thread::DoTableInit(Store& store,
-                              Instance::Ptr& inst,
-                              Instr instr,
-                              Trap::Ptr* out_trap) {
-  Table::Ptr table{store, inst->tables()[instr.imm_u32x2.fst]};
-  auto&& elem = inst->elems()[instr.imm_u32x2.snd];
-  auto size = Pop<u32>();
-  auto src = Pop<u32>();
-  auto dst = Pop<u32>();
-  TRAP_IF(Failed(table->Init(store, dst, elem, src, size)),
-          "table.init out of bounds");
-  return RunResult::Ok;
-}
-
-RunResult Thread::DoElemDrop(Instance::Ptr& inst, Instr instr) {
-  inst->elems()[instr.imm_u32].Drop();
-  return RunResult::Ok;
-}
-
-RunResult Thread::DoTableCopy(Store& store,
-                              Instance::Ptr& inst,
-                              Instr instr,
-                              Trap::Ptr* out_trap) {
-  Table::Ptr table_dst{store, inst->tables()[instr.imm_u32x2.fst]};
-  Table::Ptr table_src{store, inst->tables()[instr.imm_u32x2.snd]};
-  auto size = Pop<u32>();
-  auto src = Pop<u32>();
-  auto dst = Pop<u32>();
-  TRAP_IF(Failed(Table::Copy(store, *table_dst, dst, *table_src, src, size)),
-          "table.copy out of bounds");
-  return RunResult::Ok;
-}
-
-RunResult Thread::DoTableGet(Store& store,
-                             Instance::Ptr& inst,
-                             Instr instr,
-                             Trap::Ptr* out_trap) {
-  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
-  auto index = Pop<u32>();
-  Ref ref;
-  TRAP_IF(
-      Failed(table->Get(index, &ref)),
-      StringPrintf("table.get at %u >= max value %u", index, table->size()));
-  Push(ref);
-  return RunResult::Ok;
-}
-
-RunResult Thread::DoTableSet(Store& store,
-                             Instance::Ptr& inst,
-                             Instr instr,
-                             Trap::Ptr* out_trap) {
-  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
-  auto ref = Pop<Ref>();
-  auto index = Pop<u32>();
-  TRAP_IF(
-      Failed(table->Set(store, index, ref)),
-      StringPrintf("table.set at %u >= max value %u", index, table->size()));
-  return RunResult::Ok;
-}
-
-RunResult Thread::DoTableGrow(Store& store,
-                              Instance::Ptr& inst,
-                              Instr instr,
-                              Trap::Ptr* out_trap) {
-  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
-  u32 old_size = table->size();
-  auto delta = Pop<u32>();
-  auto ref = Pop<Ref>();
-  if (Failed(table->Grow(store, delta, ref))) {
-    Push<s32>(-1);
-  } else {
-    Push<u32>(old_size);
-  }
-  return RunResult::Ok;
-}
-
-RunResult Thread::DoTableSize(Store& store, Instance::Ptr& inst, Instr instr) {
-  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
-  Push<u32>(table->size());
-  return RunResult::Ok;
-}
-
-RunResult Thread::DoTableFill(Store& store,
-                              Instance::Ptr& inst,
-                              Instr instr,
-                              Trap::Ptr* out_trap) {
-  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
-  auto size = Pop<u32>();
-  auto value = Pop<Ref>();
-  auto dst = Pop<u32>();
-  TRAP_IF(Failed(table->Fill(store, dst, value, size)),
-          "table.fill out of bounds");
-  return RunResult::Ok;
-}
 
 template <typename T> T ShiftMask(T val) { return val & (sizeof(T)*8-1); }
 
@@ -1276,6 +1023,28 @@ T FloatMax(T lhs, T rhs) {
     return std::signbit(lhs) ? rhs : lhs;
   } else {
     return std::max(lhs, rhs);
+  }
+}
+
+template <typename R, typename T> bool CanConvert(T val) { return true; }
+template <> bool CanConvert<s32, f32>(f32 val) { return val >= -2147483648.f && val < 2147483648.f; }
+template <> bool CanConvert<s32, f64>(f64 val) { return val >= -2147483648. && val <= 2147483647.; }
+template <> bool CanConvert<u32, f32>(f32 val) { return val > -1.f && val <= 4294967296.f; }
+template <> bool CanConvert<u32, f64>(f64 val) { return val > -1. && val <= 4294967295.; }
+template <> bool CanConvert<s64, f32>(f32 val) { return val >= -9223372036854775808.f && val < 9223372036854775808.f; }
+template <> bool CanConvert<s64, f64>(f64 val) { return val >= -9223372036854775808. && val < 9223372036854775808.; }
+template <> bool CanConvert<u64, f32>(f32 val) { return val > -1.f && val < 18446744073709551616.f; }
+template <> bool CanConvert<u64, f64>(f64 val) { return val > -1. && val < 18446744073709551616.; }
+
+template <typename R, typename T>
+R IntTruncSat(T val) {
+  if (WABT_UNLIKELY(std::isnan(val))) {
+    return 0;
+  } else if (WABT_UNLIKELY(!CanConvert<R>(val))) {
+    return std::signbit(val) ? std::numeric_limits<R>::min()
+                             : std::numeric_limits<R>::max();
+  } else {
+    return static_cast<R>(val);
   }
 }
 
@@ -1649,6 +1418,237 @@ RunResult Thread::StepInternal(Store& store,
       break;
   }
 
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoCall(const Func::Ptr& func, Trap::Ptr* out_trap) {
+  if (auto* host_func = dyn_cast<HostFunc>(func.get())) {
+    // TODO
+  } else {
+    auto* defined_func = cast<DefinedFunc>(func.get());
+    PushCall(defined_func->self(), defined_func->desc().code_offset);
+  }
+  return RunResult::Ok;
+}
+
+template <typename T, typename V>
+RunResult Thread::DoLoad(Store& store,
+                         Instance::Ptr& inst,
+                         Instr instr,
+                         Trap::Ptr* out_trap) {
+  Memory::Ptr memory{store, inst->memories()[instr.imm_u32x2.fst]};
+  u32 offset = Pop<u32>();
+  V val;
+  TRAP_IF(Failed(memory->Load(offset, instr.imm_u32x2.snd, &val)),
+          StringPrintf("access at %u+%u >= max value %u", offset,
+                       instr.imm_u32x2.snd, memory->ByteSize()));
+  Push(static_cast<T>(val));
+  return RunResult::Ok;
+}
+
+template <typename T, typename V>
+RunResult Thread::DoStore(Store& store,
+                          Instance::Ptr& inst,
+                          Instr instr,
+                          Trap::Ptr* out_trap) {
+  Memory::Ptr memory{store, inst->memories()[instr.imm_u32x2.fst]};
+  u32 offset = Pop<u32>();
+  T val = static_cast<T>(Pop<V>());
+  TRAP_IF(Failed(memory->Store(offset, instr.imm_u32x2.snd, val)),
+          StringPrintf("access at %u+%u >= max value %u", offset,
+                       instr.imm_u32x2.snd, memory->ByteSize()));
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoUnop(UnopFunc<R, T> f) {
+  Push<T>(f(Pop<T>()));
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoUnop(Store& store,
+                         UnopTrapFunc<R, T> f,
+                         Trap::Ptr* out_trap) {
+  T out;
+  std::string msg;
+  TRAP_IF(f(Pop<T>(), &out, &msg) == RunResult::Trap, msg);
+  Push<T>(out);
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoBinop(BinopFunc<R, T> f) {
+  auto rhs = Pop<T>();
+  auto lhs = Pop<T>();
+  Push<T>(f(lhs, rhs));
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoBinop(Store& store,
+                          BinopTrapFunc<R, T> f,
+                          Trap::Ptr* out_trap) {
+  auto rhs = Pop<T>();
+  auto lhs = Pop<T>();
+  T out;
+  std::string msg;
+  TRAP_IF(f(lhs, rhs, &out, &msg) == RunResult::Trap, msg);
+  Push<T>(out);
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoConvert(Store& store, Trap::Ptr* out_trap) {
+  auto val = Pop<T>();
+  TRAP_UNLESS(CanConvert<R>(val), "integer overflow");
+  Push<R>(static_cast<R>(val));
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoReinterpret() {
+  Push(Bitcast<R>(Pop<T>()));
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoMemoryInit(Store& store,
+                               Instance::Ptr& inst,
+                               Instr instr,
+                               Trap::Ptr* out_trap) {
+  Memory::Ptr memory{store, inst->memories()[instr.imm_u32x2.fst]};
+  auto&& data = inst->datas()[instr.imm_u32x2.snd];
+  auto size = Pop<u32>();
+  auto src = Pop<u32>();
+  auto dst = Pop<u32>();
+  TRAP_IF(Failed(memory->Init(dst, data, src, size)),
+          "memory.init out of bounds");
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoDataDrop(Instance::Ptr& inst, Instr instr) {
+  inst->datas()[instr.imm_u32].Drop();
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoMemoryCopy(Store& store,
+                               Instance::Ptr& inst,
+                               Instr instr,
+                               Trap::Ptr* out_trap) {
+  Memory::Ptr mem_dst{store, inst->memories()[instr.imm_u32x2.fst]};
+  Memory::Ptr mem_src{store, inst->memories()[instr.imm_u32x2.snd]};
+  auto size = Pop<u32>();
+  auto src = Pop<u32>();
+  auto dst = Pop<u32>();
+  TRAP_IF(Failed(Memory::Copy(*mem_dst, dst, *mem_src, src, size)),
+          "memory.copy out of bounds");
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoMemoryFill(Store& store,
+                               Instance::Ptr& inst,
+                               Instr instr,
+                               Trap::Ptr* out_trap) {
+  Memory::Ptr memory{store, inst->memories()[instr.imm_u32]};
+  auto size = Pop<u32>();
+  auto value = Pop<u32>();
+  auto dst = Pop<u32>();
+  TRAP_IF(Failed(memory->Fill(dst, value, size)), "memory.fill out of bounds");
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableInit(Store& store,
+                              Instance::Ptr& inst,
+                              Instr instr,
+                              Trap::Ptr* out_trap) {
+  Table::Ptr table{store, inst->tables()[instr.imm_u32x2.fst]};
+  auto&& elem = inst->elems()[instr.imm_u32x2.snd];
+  auto size = Pop<u32>();
+  auto src = Pop<u32>();
+  auto dst = Pop<u32>();
+  TRAP_IF(Failed(table->Init(store, dst, elem, src, size)),
+          "table.init out of bounds");
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoElemDrop(Instance::Ptr& inst, Instr instr) {
+  inst->elems()[instr.imm_u32].Drop();
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableCopy(Store& store,
+                              Instance::Ptr& inst,
+                              Instr instr,
+                              Trap::Ptr* out_trap) {
+  Table::Ptr table_dst{store, inst->tables()[instr.imm_u32x2.fst]};
+  Table::Ptr table_src{store, inst->tables()[instr.imm_u32x2.snd]};
+  auto size = Pop<u32>();
+  auto src = Pop<u32>();
+  auto dst = Pop<u32>();
+  TRAP_IF(Failed(Table::Copy(store, *table_dst, dst, *table_src, src, size)),
+          "table.copy out of bounds");
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableGet(Store& store,
+                             Instance::Ptr& inst,
+                             Instr instr,
+                             Trap::Ptr* out_trap) {
+  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
+  auto index = Pop<u32>();
+  Ref ref;
+  TRAP_IF(
+      Failed(table->Get(index, &ref)),
+      StringPrintf("table.get at %u >= max value %u", index, table->size()));
+  Push(ref);
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableSet(Store& store,
+                             Instance::Ptr& inst,
+                             Instr instr,
+                             Trap::Ptr* out_trap) {
+  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
+  auto ref = Pop<Ref>();
+  auto index = Pop<u32>();
+  TRAP_IF(
+      Failed(table->Set(store, index, ref)),
+      StringPrintf("table.set at %u >= max value %u", index, table->size()));
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableGrow(Store& store,
+                              Instance::Ptr& inst,
+                              Instr instr,
+                              Trap::Ptr* out_trap) {
+  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
+  u32 old_size = table->size();
+  auto delta = Pop<u32>();
+  auto ref = Pop<Ref>();
+  if (Failed(table->Grow(store, delta, ref))) {
+    Push<s32>(-1);
+  } else {
+    Push<u32>(old_size);
+  }
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableSize(Store& store, Instance::Ptr& inst, Instr instr) {
+  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
+  Push<u32>(table->size());
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableFill(Store& store,
+                              Instance::Ptr& inst,
+                              Instr instr,
+                              Trap::Ptr* out_trap) {
+  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
+  auto size = Pop<u32>();
+  auto value = Pop<Ref>();
+  auto dst = Pop<u32>();
+  TRAP_IF(Failed(table->Fill(store, dst, value, size)),
+          "table.fill out of bounds");
   return RunResult::Ok;
 }
 
