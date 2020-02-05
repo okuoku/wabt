@@ -380,7 +380,11 @@ class RefPtr {
   T* get();
   T* operator->();
   T& operator*();
-  explicit operator bool();
+  explicit operator bool() const;
+
+  const T* get() const;
+  const T* operator->() const;
+  const T& operator*() const;
 
   Ref ref() const;
 

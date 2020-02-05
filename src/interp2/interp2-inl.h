@@ -169,28 +169,31 @@ RefPtr<T>::RefPtr(Store& store, Ref ref) {
 template <typename T>
 RefPtr<T>::RefPtr(const RefPtr& other)
     : obj_(other.obj_), store_(other.store_) {
-  root_index_ = store_->CopyRoot(other.root_index_);
+  root_index_ = store_ ? store_->CopyRoot(other.root_index_) : 0;
 }
 
 template <typename T>
 RefPtr<T>& RefPtr<T>::operator=(const RefPtr& other) {
   obj_ = other.obj_;
   store_ = other.store_;
-  root_index_ = store_->CopyRoot(other.root_index_);
+  root_index_ = store_ ? store_->CopyRoot(other.root_index_) : 0;
 }
 
 template <typename T>
 RefPtr<T>::RefPtr(RefPtr&& other)
-    : obj_(other.obj_), root_index_(other.root_index_) {
+    : obj_(other.obj_), store_(other.store_), root_index_(other.root_index_) {
   other.obj_ = nullptr;
+  other.store_ = nullptr;
   other.root_index_ = 0;
 }
 
 template <typename T>
 RefPtr<T>& RefPtr<T>::operator=(RefPtr&& other) {
   obj_ = other.obj_;
+  store_ = other.store_;
   root_index_ = other.root_index_;
   other.obj_ = nullptr;
+  other.store_ = nullptr;
   other.root_index_ = 0;
   return *this;
 }
@@ -218,8 +221,23 @@ T& RefPtr<T>::operator*() {
 }
 
 template <typename T>
-RefPtr<T>::operator bool() {
+RefPtr<T>::operator bool() const {
   return obj_ != nullptr;
+}
+
+template <typename T>
+const T* RefPtr<T>::get() const {
+  return obj_;
+}
+
+template <typename T>
+const T* RefPtr<T>::operator->() const {
+  return obj_;
+}
+
+template <typename T>
+const T& RefPtr<T>::operator*() const {
+  return *obj_;
 }
 
 template <typename T>
