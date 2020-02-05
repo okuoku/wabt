@@ -41,7 +41,10 @@ class ElemSegment;
 class Instance;
 template <typename T> class RefPtr;
 
+using s8 = int8_t;
 using u8 = uint8_t;
+using s16 = int16_t;
+using u16 = uint16_t;
 using s32 = int32_t;
 using u32 = uint32_t;
 using Index = uint32_t;
@@ -832,6 +835,7 @@ class Thread : public Object {
 
   RunResult Run(Store&, RefPtr<Trap>* out_trap);
   RunResult Run(Store&, int num_instructions, RefPtr<Trap>* out_trap);
+  RunResult Step(Store&, RefPtr<Trap>* out_trap);
 
  private:
   friend Store;
@@ -841,9 +845,55 @@ class Thread : public Object {
   void Mark(Store&) override;
 
   void PushCall(Ref func, u32 offset);
+  RunResult PopCall();
+  RunResult DoCall(const RefPtr<Func>&, RefPtr<Trap>* out_trap);
+  RunResult DoReturnCall(const RefPtr<Func>&, RefPtr<Trap>* out_trap);
 
   void PushValues(const TypedValues&);
   void CopyValues(Store&, const ValueTypes&, TypedValues*);
+
+  Value& Pick(Index);
+
+  template <typename T>
+  T Pop();
+  Value Pop();
+
+  template <typename T>
+  void Push(T);
+  void Push(Value);
+
+  template <typename R, typename T>
+  using UnopFunc = R(T);
+  template <typename R, typename T>
+  using UnopTrapFunc = RunResult(T, R*, std::string*);
+  template <typename R, typename T>
+  using BinopFunc = R(T, T);
+  template <typename R, typename T>
+  using BinopTrapFunc = RunResult(T, T, R*, std::string*);
+
+  template <typename R, typename T>
+  RunResult DoUnop(UnopFunc<R, T>);
+  template <typename R, typename T>
+  RunResult DoUnop(Store&, UnopTrapFunc<R, T>, RefPtr<Trap>* out_trap);
+  template <typename R, typename T>
+  RunResult DoBinop(BinopFunc<R, T>);
+  template <typename R, typename T>
+  RunResult DoBinop(Store&, BinopTrapFunc<R, T>, RefPtr<Trap>* out_trap);
+
+  template <typename R, typename T>
+  RunResult DoConvert(Store&, RefPtr<Trap>* out_trap);
+  template <typename R, typename T>
+  RunResult DoReinterpret();
+
+  template <typename T, typename V = T>
+  RunResult DoLoad(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+  template <typename T, typename V = T>
+  RunResult DoStore(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+
+  RunResult StepInternal(Store&,
+                         RefPtr<Instance>&,
+                         RefPtr<Module>&,
+                         RefPtr<Trap>* out_trap);
 
   std::vector<Frame> frames_;
   std::vector<Value> values_;

@@ -146,3 +146,38 @@ R"(   0| alloca 1
   94| return
 )");
 }
+
+TEST(Interp, Fac) {
+  std::vector<u8> data = {
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01,
+      0x60, 0x01, 0x7f, 0x01, 0x7f, 0x03, 0x02, 0x01, 0x00, 0x07, 0x07,
+      0x01, 0x03, 0x66, 0x61, 0x63, 0x00, 0x00, 0x0a, 0x22, 0x01, 0x20,
+      0x01, 0x01, 0x7f, 0x41, 0x01, 0x21, 0x01, 0x03, 0x7f, 0x20, 0x01,
+      0x20, 0x00, 0x45, 0x0d, 0x01, 0x20, 0x00, 0x6c, 0x21, 0x01, 0x20,
+      0x00, 0x41, 0x01, 0x6b, 0x21, 0x00, 0x0c, 0x00, 0x0b, 0x0b,
+  };
+
+  Errors errors;
+  ReadBinaryOptions options;
+  ModuleDesc module;
+  Result result =
+      ReadModule(data.data(), data.size(), options, &errors, &module);
+  ASSERT_EQ(Result::Ok, result)
+      << FormatErrorsToString(errors, Location::Type::Binary);
+
+  Store store;
+  auto mod = Module::New(store, module);
+  RefPtr<Trap> trap;
+  auto inst = Instance::Instantiate(store, mod.ref(), {}, &trap);
+  ASSERT_TRUE(inst) << trap->message();
+  ASSERT_EQ(1u, inst->exports().size());
+
+  RefPtr<DefinedFunc> func{store, inst->exports()[0]};
+  TypedValues results;
+  result = func->Call(store, {TypedValue(ValueType::I32, Value(s32(5)))},
+                      &results, &trap);
+
+  ASSERT_EQ(1u, results.size());
+  ASSERT_EQ(ValueType::I32, results[0].type);
+  ASSERT_EQ(120u, results[0].value.Get<u32>());
+}

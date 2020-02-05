@@ -19,6 +19,8 @@
 #include <algorithm>
 #include <cassert>
 #include <cinttypes>
+#include <cmath>
+#include <limits>
 
 #include "src/make-unique.h"
 
@@ -79,7 +81,9 @@ Result Match(const FuncType& expected,
              const FuncType& actual,
              std::string* out_msg) {
   if (expected.params != actual.params || expected.results != actual.results) {
-    *out_msg = "import signature mismatch";
+    if (out_msg) {
+      *out_msg = "import signature mismatch";
+    }
     return Result::Error;
   }
   return Result::Ok;
@@ -620,7 +624,7 @@ RefPtr<Instance> Instance::Instantiate(Store& store,
   RefPtr<Instance> inst = store.Alloc<Instance>(store, module);
 
   size_t import_desc_count = mod->desc().imports.size();
-  if (imports.size() >= import_desc_count) {
+  if (imports.size() > import_desc_count) {
     *out_trap = Trap::New(store, "not enough imports!");
     return {};
   }
@@ -799,6 +803,30 @@ void Thread::PushCall(Ref func, u32 offset) {
   frames_.emplace_back(func, offset);
 }
 
+RunResult Thread::PopCall() {
+  frames_.pop_back();
+  if (frames_.empty()) {
+    return RunResult::Return;
+  }
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoCall(const RefPtr<Func>& func, RefPtr<Trap>* out_trap) {
+  if (auto* host_func = dyn_cast<HostFunc>(func.get())) {
+    // TODO
+  } else {
+    auto* defined_func = cast<DefinedFunc>(func.get());
+    PushCall(defined_func->self(), defined_func->desc().code_offset);
+  }
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoReturnCall(const RefPtr<Func>& func,
+                               RefPtr<Trap>* out_trap) {
+  // TODO
+  return RunResult::Ok;
+}
+
 void Thread::CopyValues(Store& store,
                         const ValueTypes& types,
                         TypedValues* out_values) {
@@ -819,8 +847,615 @@ RunResult Thread::Run(Store& store, RefPtr<Trap>* out_trap) {
   return result;
 }
 
-RunResult Thread::Run(Store&, int num_instructions, RefPtr<Trap>* out_trap) {
-  // TODO
+RunResult Thread::Run(Store& store,
+                      int num_instructions,
+                      RefPtr<Trap>* out_trap) {
+  RefPtr<DefinedFunc> func{store, frames_.back().func};
+  RefPtr<Instance> inst{store, func->instance()};
+  RefPtr<Module> mod{store, inst->module()};
+  for (;num_instructions > 0; --num_instructions) {
+    auto result = StepInternal(store, inst, mod, out_trap);
+    if (result != RunResult::Ok) {
+      return result;
+    }
+  }
+  return RunResult::Ok;
+}
+
+RunResult Thread::Step(Store& store, RefPtr<Trap>* out_trap) {
+  RefPtr<DefinedFunc> func{store, frames_.back().func};
+  RefPtr<Instance> inst{store, func->instance()};
+  RefPtr<Module> mod{store, inst->module()};
+  return StepInternal(store, inst, mod, out_trap);
+}
+
+Value& Thread::Pick(Index index) {
+  assert(index > 0 && index <= values_.size());
+  return values_[values_.size() - index];
+}
+
+template <typename T>
+T Thread::Pop() {
+  return Pop().Get<T>();
+}
+
+Value Thread::Pop() {
+  refs_.pop_back();
+  auto value = values_.back();
+  values_.pop_back();
+  return value;
+}
+
+template <typename T>
+void Thread::Push(T value) {
+  Push(Value(value));
+}
+
+template <>
+void Thread::Push<bool>(bool value) {
+  Push(Value(static_cast<u32>(value ? 1 : 0)));
+}
+
+void Thread::Push(Value value) {
+  values_.push_back(value);
+  refs_.push_back(false);
+}
+
+#define TRAP(msg) *out_trap = Trap::New(store, (msg), frames_), RunResult::Trap
+#define TRAP_IF(cond, msg)     \
+  if (WABT_UNLIKELY((cond))) { \
+    return TRAP(msg);          \
+  }
+#define TRAP_UNLESS(cond, msg) TRAP_IF(!(cond), msg)
+
+template <typename R, typename T>
+RunResult Thread::DoUnop(UnopFunc<R, T> f) {
+  Push<T>(f(Pop<T>()));
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoUnop(Store& store,
+                         UnopTrapFunc<R, T> f,
+                         RefPtr<Trap>* out_trap) {
+  T out;
+  std::string msg;
+  TRAP_IF(f(Pop<T>(), &out, &msg) == RunResult::Trap, msg);
+  Push<T>(out);
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoBinop(BinopFunc<R, T> f) {
+  auto rhs = Pop<T>();
+  auto lhs = Pop<T>();
+  Push<T>(f(lhs, rhs));
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoBinop(Store& store,
+                          BinopTrapFunc<R, T> f,
+                          RefPtr<Trap>* out_trap) {
+  auto rhs = Pop<T>();
+  auto lhs = Pop<T>();
+  T out;
+  std::string msg;
+  TRAP_IF(f(lhs, rhs, &out, &msg) == RunResult::Trap, msg);
+  Push<T>(out);
+  return RunResult::Ok;
+}
+
+template <typename R, typename T> bool CanConvert(T val) { return true; }
+template <> bool CanConvert<s32, f32>(f32 val) { return val >= -2147483648.f && val < 2147483648.f; }
+template <> bool CanConvert<s32, f64>(f64 val) { return val >= -2147483648. && val <= 2147483647.; }
+template <> bool CanConvert<u32, f32>(f32 val) { return val > -1.f && val <= 4294967296.f; }
+template <> bool CanConvert<u32, f64>(f64 val) { return val > -1. && val <= 4294967295.; }
+template <> bool CanConvert<s64, f32>(f32 val) { return val >= -9223372036854775808.f && val < 9223372036854775808.f; }
+template <> bool CanConvert<s64, f64>(f64 val) { return val >= -9223372036854775808. && val < 9223372036854775808.; }
+template <> bool CanConvert<u64, f32>(f32 val) { return val > -1.f && val < 18446744073709551616.f; }
+template <> bool CanConvert<u64, f64>(f64 val) { return val > -1. && val < 18446744073709551616.; }
+
+template <typename R, typename T>
+RunResult Thread::DoConvert(Store& store, RefPtr<Trap>* out_trap) {
+  auto val = Pop<T>();
+  TRAP_UNLESS(CanConvert<R>(val), "integer overflow");
+  Push<R>(static_cast<R>(val));
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoReinterpret() {
+  Push(Bitcast<R>(Pop<T>()));
+  return RunResult::Ok;
+}
+
+template <typename T, typename V>
+RunResult Thread::DoLoad(Store& store,
+                         RefPtr<Instance>& inst,
+                         Instr instr,
+                         RefPtr<Trap>* out_trap) {
+  RefPtr<Memory> memory{store, inst->memories()[instr.imm_u32x2.fst]};
+  u32 offset = Pop<u32>();
+  V val;
+  TRAP_IF(Failed(memory->Load(offset, instr.imm_u32x2.snd, &val)),
+          StringPrintf("access at %u+%u >= max value %u", offset,
+                       instr.imm_u32x2.snd, memory->ByteSize()));
+  Push(static_cast<T>(val));
+  return RunResult::Ok;
+}
+
+template <typename T, typename V>
+RunResult Thread::DoStore(Store& store,
+                          RefPtr<Instance>& inst,
+                          Instr instr,
+                          RefPtr<Trap>* out_trap) {
+  RefPtr<Memory> memory{store, inst->memories()[instr.imm_u32x2.fst]};
+  u32 offset = Pop<u32>();
+  T val = static_cast<T>(Pop<V>());
+  TRAP_IF(Failed(memory->Store(offset, instr.imm_u32x2.snd, val)),
+          StringPrintf("access at %u+%u >= max value %u", offset,
+                       instr.imm_u32x2.snd, memory->ByteSize()));
+  return RunResult::Ok;
+}
+
+template <typename T> T ShiftMask(T val) { return val & (sizeof(T)*8-1); }
+
+template <typename T> bool IntEqz(T val) { return val == 0; }
+template <typename T> bool Eq(T lhs, T rhs) { return lhs == rhs; }
+template <typename T> bool Ne(T lhs, T rhs) { return lhs != rhs; }
+template <typename T> bool Lt(T lhs, T rhs) { return lhs < rhs; }
+template <typename T> bool Le(T lhs, T rhs) { return lhs <= rhs; }
+template <typename T> bool Gt(T lhs, T rhs) { return lhs > rhs; }
+template <typename T> bool Ge(T lhs, T rhs) { return lhs >= rhs; }
+template <typename T> T IntClz(T val) { return Clz(val); }
+template <typename T> T IntCtz(T val) { return Ctz(val); }
+template <typename T> T IntPopcnt(T val) { return Popcount(val); }
+template <typename T> T Add(T lhs, T rhs) { return lhs + rhs; }
+template <typename T> T Sub(T lhs, T rhs) { return lhs - rhs; }
+template <typename T> T Mul(T lhs, T rhs) { return lhs * rhs; }
+template <typename T> T IntAnd(T lhs, T rhs) { return lhs & rhs; }
+template <typename T> T IntOr(T lhs, T rhs) { return lhs | rhs; }
+template <typename T> T IntXor(T lhs, T rhs) { return lhs ^ rhs; }
+template <typename T> T IntShl(T lhs, T rhs) { return lhs << ShiftMask(rhs); }
+template <typename T> T IntShr(T lhs, T rhs) { return lhs >> ShiftMask(rhs); }
+
+template <typename T>
+T IntRotl(T lhs, T rhs) {
+  return (lhs << ShiftMask(rhs)) | (lhs >> ShiftMask<T>(-rhs));
+}
+
+template <typename T>
+T IntRotr(T lhs, T rhs) {
+  return (lhs >> ShiftMask(rhs)) | (lhs << ShiftMask<T>(-rhs));
+}
+
+template <typename T, int N>
+T IntExtend(T val) {
+  // Hacker's delight 2.6 - sign extension
+  auto bit = T{1} << N;
+  auto mask = (bit << 1) - 1;
+  return ((val & mask) ^ bit) - bit;
+}
+
+// i{32,64}.{div,rem}_s are special-cased because they trap when dividing the
+// max signed value by -1. The modulo operation on x86 uses the same
+// instruction to generate the quotient and the remainder.
+template <typename T,
+          typename std::enable_if<std::is_signed<T>::value, int>::type = 0>
+bool IsNormalDivRem(T lhs, T rhs) {
+  return !(lhs == std::numeric_limits<T>::min() && rhs == -1);
+}
+
+template <typename T,
+          typename std::enable_if<!std::is_signed<T>::value, int>::type = 0>
+bool IsNormalDivRem(T lhs, T rhs) {
+  return true;
+}
+
+template <typename T>
+RunResult IntDiv(T lhs, T rhs, T* out, std::string* out_msg) {
+  if (WABT_UNLIKELY(rhs == 0)) { *out_msg = "integer divide by zero"; return RunResult::Trap; }
+  if (WABT_LIKELY(IsNormalDivRem(lhs, rhs))) {
+    *out = lhs / rhs;
+    return RunResult::Ok;
+  } else {
+    *out_msg = "integer overflow";
+    return RunResult::Trap;
+  }
+}
+
+template <typename T>
+RunResult IntRem(T lhs, T rhs, T* out, std::string* out_msg) {
+  if (WABT_UNLIKELY(rhs == 0)) { *out_msg = "integer divide by zero"; return RunResult::Trap; }
+  if (WABT_LIKELY(IsNormalDivRem(lhs, rhs))) {
+    *out = lhs % rhs;
+  } else {
+    *out = 0;
+  }
+  return RunResult::Ok;
+}
+
+template <typename T> T FloatAbs(T val) { return std::abs(val); }
+template <typename T> T FloatNeg(T val) { return -val; }
+template <typename T> T FloatCeil(T val) { return std::ceil(val); }
+template <typename T> T FloatFloor(T val) { return std::floor(val); }
+template <typename T> T FloatTrunc(T val) { return std::trunc(val); }
+template <typename T> T FloatNearest(T val) { return std::nearbyint(val); }
+template <typename T> T FloatSqrt(T val) { return std::sqrt(val); }
+template <typename T> T FloatCopysign(T lhs, T rhs) { return std::copysign(lhs, rhs); }
+
+template <typename T>
+T FloatDiv(T lhs, T rhs) {
+  // IEE754 specifies what should happen when dividing a float by zero, but
+  // C/C++ says it is undefined behavior.
+  if (WABT_UNLIKELY(rhs == 0)) {
+    return std::isnan(lhs) || lhs == 0
+               ? std::numeric_limits<T>::quiet_NaN()
+               : std::copysign(std::numeric_limits<T>::infinity(), lhs * rhs);
+  }
+  return lhs / rhs;
+}
+
+template <typename T>
+T FloatMin(T lhs, T rhs) {
+  if (WABT_UNLIKELY(std::isnan(lhs) || std::isnan(rhs))) {
+    return std::numeric_limits<T>::quiet_NaN();
+  } else if (WABT_UNLIKELY(lhs == 0 || rhs == 0)) {
+    return std::signbit(lhs) ? lhs : rhs;
+  } else {
+    return std::min(lhs, rhs);
+  }
+}
+
+template <typename T>
+T FloatMax(T lhs, T rhs) {
+  if (WABT_UNLIKELY(std::isnan(lhs) || std::isnan(rhs))) {
+    return std::numeric_limits<T>::quiet_NaN();
+  } else if (WABT_UNLIKELY(lhs == 0 || rhs == 0)) {
+    return std::signbit(lhs) ? rhs : lhs;
+  } else {
+    return std::max(lhs, rhs);
+  }
+}
+
+RunResult Thread::StepInternal(Store& store,
+                               RefPtr<Instance>& inst,
+                               RefPtr<Module>& mod,
+                               RefPtr<Trap>* out_trap) {
+  u32& pc = frames_.back().offset;
+  auto instr = mod->desc().istream.Read(&pc);
+  switch (instr.op) {
+    case Opcode::Unreachable:
+      return TRAP("unreachable executed");
+
+    case Opcode::Nop:
+      break;
+
+    case Opcode::Br:
+      pc = instr.imm_u32;
+      break;
+
+    case Opcode::BrIf:
+      if (Pop<u32>()) {
+        pc = instr.imm_u32;
+      }
+      break;
+
+    case Opcode::BrTable: {
+      auto key = Pop<u32>();
+      if (key >= instr.imm_u32) {
+        key = instr.imm_u32;
+      }
+      pc += key * 16;  // TODO: magic number
+      break;
+    }
+
+    case Opcode::Return:
+      return PopCall();
+
+    case Opcode::Call: {
+      Ref new_func_ref = inst->funcs()[instr.imm_u32];
+      RefPtr<DefinedFunc> new_func{store, new_func_ref};
+      PushCall(new_func_ref, new_func->desc().code_offset);
+      break;
+    }
+
+    case Opcode::CallIndirect:
+    case Opcode::ReturnCallIndirect: {
+      RefPtr<Table> table{store, inst->tables()[instr.imm_u32x2.fst]};
+      auto&& func_type = mod->desc().func_types[instr.imm_u32x2.snd];
+      auto entry = Pop<u32>();
+      TRAP_IF(entry >= table->elements().size(), "undefined table index");
+      auto new_func_ref = table->elements()[entry];
+      TRAP_IF(new_func_ref == Ref::Null, "uninitialized table element");
+      RefPtr<Func> new_func{store, new_func_ref};
+      TRAP_IF(Failed(Match(new_func->func_type(), func_type, nullptr)),
+              "call indirect func type mismatch");
+      if (instr.op == Opcode::ReturnCallIndirect) {
+        return DoReturnCall(new_func, out_trap);
+      } else {
+        return DoCall(new_func, out_trap);
+      }
+    }
+
+    case Opcode::Drop:
+      Pop();
+      break;
+
+    case Opcode::Select: {
+      auto cond = Pop<u32>();
+      Value false_ = Pop();
+      Value true_ = Pop();
+      Push(cond ? true_ : false_);
+      break;
+    }
+
+    case Opcode::LocalGet:
+      Push(Pick(instr.imm_u32));
+      break;
+
+    case Opcode::LocalSet: {
+      auto value = Pop();
+      Pick(instr.imm_u32) = value;
+      break;
+    }
+
+    case Opcode::LocalTee:
+      Pick(instr.imm_u32) = Pick(1);
+      break;
+
+    case Opcode::GlobalGet: {
+      RefPtr<Global> global{store, inst->globals()[instr.imm_u32]};
+      Push(global->Get());
+      break;
+    }
+
+    case Opcode::GlobalSet: {
+      RefPtr<Global> global{store, inst->globals()[instr.imm_u32]};
+      global->UnsafeSet(Pop());
+      break;
+    }
+
+    case Opcode::I32Load:    return DoLoad<u32>(store, inst, instr, out_trap);
+    case Opcode::I64Load:    return DoLoad<u64>(store, inst, instr, out_trap);
+    case Opcode::F32Load:    return DoLoad<f32>(store, inst, instr, out_trap);
+    case Opcode::F64Load:    return DoLoad<f64>(store, inst, instr, out_trap);
+    case Opcode::I32Load8S:  return DoLoad<s8, s32>(store, inst, instr, out_trap);
+    case Opcode::I32Load8U:  return DoLoad<u8, u32>(store, inst, instr, out_trap);
+    case Opcode::I32Load16S: return DoLoad<s16, s32>(store, inst, instr, out_trap);
+    case Opcode::I32Load16U: return DoLoad<u16, u32>(store, inst, instr, out_trap);
+    case Opcode::I64Load8S:  return DoLoad<s8, s64>(store, inst, instr, out_trap);
+    case Opcode::I64Load8U:  return DoLoad<u8, u64>(store, inst, instr, out_trap);
+    case Opcode::I64Load16S: return DoLoad<s16, s64>(store, inst, instr, out_trap);
+    case Opcode::I64Load16U: return DoLoad<u16, u64>(store, inst, instr, out_trap);
+    case Opcode::I64Load32S: return DoLoad<s32, s64>(store, inst, instr, out_trap);
+    case Opcode::I64Load32U: return DoLoad<u32, u64>(store, inst, instr, out_trap);
+
+    case Opcode::I32Store:   return DoStore<u32>(store, inst, instr, out_trap);
+    case Opcode::I64Store:   return DoStore<u64>(store, inst, instr, out_trap);
+    case Opcode::F32Store:   return DoStore<f32>(store, inst, instr, out_trap);
+    case Opcode::F64Store:   return DoStore<f64>(store, inst, instr, out_trap);
+    case Opcode::I32Store8:  return DoStore<u8, u32>(store, inst, instr, out_trap);
+    case Opcode::I32Store16: return DoStore<u16, u32>(store, inst, instr, out_trap);
+    case Opcode::I64Store8:  return DoStore<u8, u64>(store, inst, instr, out_trap);
+    case Opcode::I64Store16: return DoStore<u16, u64>(store, inst, instr, out_trap);
+    case Opcode::I64Store32: return DoStore<u32, u64>(store, inst, instr, out_trap);
+
+    case Opcode::MemorySize: {
+      RefPtr<Memory> memory{store, inst->memories()[instr.imm_u32]};
+      Push(memory->PageSize());
+      break;
+    }
+
+    case Opcode::MemoryGrow: {
+      RefPtr<Memory> memory{store, inst->memories()[instr.imm_u32]};
+      u32 old_size = memory->PageSize();
+      if (Failed(memory->Grow(Pop<u32>()))) {
+        Push<s32>(-1);
+      } else {
+        Push<u32>(old_size);
+      }
+      break;
+    }
+
+    case Opcode::I32Const:
+    case Opcode::F32Const:
+      Push<u32>(instr.imm_u32);
+      break;
+
+    case Opcode::I64Const:
+    case Opcode::F64Const:
+      Push<u64>(instr.imm_u64);
+      break;
+
+    case Opcode::I32Eqz: return DoUnop(IntEqz<u32>);
+    case Opcode::I32Eq:  return DoBinop(Eq<u32>);
+    case Opcode::I32Ne:  return DoBinop(Ne<u32>);
+    case Opcode::I32LtS: return DoBinop(Lt<s32>);
+    case Opcode::I32LtU: return DoBinop(Lt<u32>);
+    case Opcode::I32GtS: return DoBinop(Gt<s32>);
+    case Opcode::I32GtU: return DoBinop(Gt<u32>);
+    case Opcode::I32LeS: return DoBinop(Le<s32>);
+    case Opcode::I32LeU: return DoBinop(Le<u32>);
+    case Opcode::I32GeS: return DoBinop(Ge<s32>);
+    case Opcode::I32GeU: return DoBinop(Ge<u32>);
+
+    case Opcode::I64Eqz: return DoUnop(IntEqz<u64>);
+    case Opcode::I64Eq:  return DoBinop(Eq<u64>);
+    case Opcode::I64Ne:  return DoBinop(Ne<u64>);
+    case Opcode::I64LtS: return DoBinop(Lt<s64>);
+    case Opcode::I64LtU: return DoBinop(Lt<u64>);
+    case Opcode::I64GtS: return DoBinop(Gt<s64>);
+    case Opcode::I64GtU: return DoBinop(Gt<u64>);
+    case Opcode::I64LeS: return DoBinop(Le<s64>);
+    case Opcode::I64LeU: return DoBinop(Le<u64>);
+    case Opcode::I64GeS: return DoBinop(Ge<s64>);
+    case Opcode::I64GeU: return DoBinop(Ge<u64>);
+
+    case Opcode::F32Eq:  return DoBinop(Eq<f32>);
+    case Opcode::F32Ne:  return DoBinop(Ne<f32>);
+    case Opcode::F32Lt:  return DoBinop(Lt<f32>);
+    case Opcode::F32Gt:  return DoBinop(Gt<f32>);
+    case Opcode::F32Le:  return DoBinop(Le<f32>);
+    case Opcode::F32Ge:  return DoBinop(Ge<f32>);
+
+    case Opcode::F64Eq:  return DoBinop(Eq<f64>);
+    case Opcode::F64Ne:  return DoBinop(Ne<f64>);
+    case Opcode::F64Lt:  return DoBinop(Lt<f64>);
+    case Opcode::F64Gt:  return DoBinop(Gt<f64>);
+    case Opcode::F64Le:  return DoBinop(Le<f64>);
+    case Opcode::F64Ge:  return DoBinop(Ge<f64>);
+
+    case Opcode::I32Clz:    return DoUnop(IntClz<u32>);
+    case Opcode::I32Ctz:    return DoUnop(IntCtz<u32>);
+    case Opcode::I32Popcnt: return DoUnop(IntPopcnt<u32>);
+    case Opcode::I32Add:    return DoBinop(Add<u32>);
+    case Opcode::I32Sub:    return DoBinop(Sub<u32>);
+    case Opcode::I32Mul:    return DoBinop(Mul<u32>);
+    case Opcode::I32DivS:   return DoBinop(store, IntDiv<s32>, out_trap);
+    case Opcode::I32DivU:   return DoBinop(store, IntDiv<u32>, out_trap);
+    case Opcode::I32RemS:   return DoBinop(store, IntRem<s32>, out_trap);
+    case Opcode::I32RemU:   return DoBinop(store, IntRem<u32>, out_trap);
+    case Opcode::I32And:    return DoBinop(IntAnd<u32>);
+    case Opcode::I32Or:     return DoBinop(IntOr<u32>);
+    case Opcode::I32Xor:    return DoBinop(IntXor<u32>);
+    case Opcode::I32Shl:    return DoBinop(IntShl<u32>);
+    case Opcode::I32ShrS:   return DoBinop(IntShr<s32>);
+    case Opcode::I32ShrU:   return DoBinop(IntShr<u32>);
+    case Opcode::I32Rotl:   return DoBinop(IntRotl<u32>);
+    case Opcode::I32Rotr:   return DoBinop(IntRotr<u32>);
+
+    case Opcode::I64Clz:    return DoUnop(IntClz<u64>);
+    case Opcode::I64Ctz:    return DoUnop(IntCtz<u64>);
+    case Opcode::I64Popcnt: return DoUnop(IntPopcnt<u64>);
+    case Opcode::I64Add:    return DoBinop(Add<u64>);
+    case Opcode::I64Sub:    return DoBinop(Sub<u64>);
+    case Opcode::I64Mul:    return DoBinop(Mul<u64>);
+    case Opcode::I64DivS:   return DoBinop(store, IntDiv<s64>, out_trap);
+    case Opcode::I64DivU:   return DoBinop(store, IntDiv<u64>, out_trap);
+    case Opcode::I64RemS:   return DoBinop(store, IntRem<s64>, out_trap);
+    case Opcode::I64RemU:   return DoBinop(store, IntRem<u64>, out_trap);
+    case Opcode::I64And:    return DoBinop(IntAnd<u64>);
+    case Opcode::I64Or:     return DoBinop(IntOr<u64>);
+    case Opcode::I64Xor:    return DoBinop(IntXor<u64>);
+    case Opcode::I64Shl:    return DoBinop(IntShl<u64>);
+    case Opcode::I64ShrS:   return DoBinop(IntShr<s64>);
+    case Opcode::I64ShrU:   return DoBinop(IntShr<u64>);
+    case Opcode::I64Rotl:   return DoBinop(IntRotl<u64>);
+    case Opcode::I64Rotr:   return DoBinop(IntRotr<u64>);
+
+    case Opcode::F32Abs:     return DoUnop(FloatAbs<f32>);
+    case Opcode::F32Neg:     return DoUnop(FloatNeg<f32>);
+    case Opcode::F32Ceil:    return DoUnop(FloatCeil<f32>);
+    case Opcode::F32Floor:   return DoUnop(FloatFloor<f32>);
+    case Opcode::F32Trunc:   return DoUnop(FloatTrunc<f32>);
+    case Opcode::F32Nearest: return DoUnop(FloatNearest<f32>);
+    case Opcode::F32Sqrt:    return DoUnop(FloatSqrt<f32>);
+    case Opcode::F32Add:      return DoBinop(Add<f32>);
+    case Opcode::F32Sub:      return DoBinop(Sub<f32>);
+    case Opcode::F32Mul:      return DoBinop(Mul<f32>);
+    case Opcode::F32Div:      return DoBinop(FloatDiv<f32>);
+    case Opcode::F32Min:      return DoBinop(FloatMin<f32>);
+    case Opcode::F32Max:      return DoBinop(FloatMax<f32>);
+    case Opcode::F32Copysign: return DoBinop(FloatCopysign<f32>);
+
+    case Opcode::F64Abs:     return DoUnop(FloatAbs<f64>);
+    case Opcode::F64Neg:     return DoUnop(FloatNeg<f64>);
+    case Opcode::F64Ceil:    return DoUnop(FloatCeil<f64>);
+    case Opcode::F64Floor:   return DoUnop(FloatFloor<f64>);
+    case Opcode::F64Trunc:   return DoUnop(FloatTrunc<f64>);
+    case Opcode::F64Nearest: return DoUnop(FloatNearest<f64>);
+    case Opcode::F64Sqrt:    return DoUnop(FloatSqrt<f64>);
+    case Opcode::F64Add:      return DoBinop(Add<f64>);
+    case Opcode::F64Sub:      return DoBinop(Sub<f64>);
+    case Opcode::F64Mul:      return DoBinop(Mul<f64>);
+    case Opcode::F64Div:      return DoBinop(FloatDiv<f64>);
+    case Opcode::F64Min:      return DoBinop(FloatMin<f64>);
+    case Opcode::F64Max:      return DoBinop(FloatMax<f64>);
+    case Opcode::F64Copysign: return DoBinop(FloatCopysign<f64>);
+
+    case Opcode::I32WrapI64:      return DoConvert<u32, u64>(store, out_trap);
+    case Opcode::I32TruncF32S:    return DoConvert<s32, f32>(store, out_trap);
+    case Opcode::I32TruncF32U:    return DoConvert<u32, f32>(store, out_trap);
+    case Opcode::I32TruncF64S:    return DoConvert<s32, f64>(store, out_trap);
+    case Opcode::I32TruncF64U:    return DoConvert<u32, f64>(store, out_trap);
+    case Opcode::I64ExtendI32S:   return DoConvert<s64, s32>(store, out_trap);
+    case Opcode::I64ExtendI32U:   return DoConvert<u64, u32>(store, out_trap);
+    case Opcode::I64TruncF32S:    return DoConvert<s64, f32>(store, out_trap);
+    case Opcode::I64TruncF32U:    return DoConvert<u64, f32>(store, out_trap);
+    case Opcode::I64TruncF64S:    return DoConvert<s64, f64>(store, out_trap);
+    case Opcode::I64TruncF64U:    return DoConvert<u64, f64>(store, out_trap);
+    case Opcode::F32ConvertI32S:  return DoConvert<f32, s32>(store, out_trap);
+    case Opcode::F32ConvertI32U:  return DoConvert<f32, u32>(store, out_trap);
+    case Opcode::F32ConvertI64S:  return DoConvert<f32, s64>(store, out_trap);
+    case Opcode::F32ConvertI64U:  return DoConvert<f32, u64>(store, out_trap);
+    case Opcode::F32DemoteF64:    return DoConvert<f32, f64>(store, out_trap);
+    case Opcode::F64ConvertI32S:  return DoConvert<f64, s32>(store, out_trap);
+    case Opcode::F64ConvertI32U:  return DoConvert<f64, u32>(store, out_trap);
+    case Opcode::F64ConvertI64S:  return DoConvert<f64, s64>(store, out_trap);
+    case Opcode::F64ConvertI64U:  return DoConvert<f64, u64>(store, out_trap);
+    case Opcode::F64PromoteF32:   return DoConvert<f64, f64>(store, out_trap);
+
+    case Opcode::I32ReinterpretF32: return DoReinterpret<u32, f32>();
+    case Opcode::F32ReinterpretI32: return DoReinterpret<f32, u32>();
+    case Opcode::I64ReinterpretF64: return DoReinterpret<u64, f64>();
+    case Opcode::F64ReinterpretI64: return DoReinterpret<f64, u64>();
+
+    case Opcode::I32Extend8S:   return DoUnop(IntExtend<u32, 7>);
+    case Opcode::I32Extend16S:  return DoUnop(IntExtend<u32, 15>);
+    case Opcode::I64Extend8S:   return DoUnop(IntExtend<u64, 7>);
+    case Opcode::I64Extend16S:  return DoUnop(IntExtend<u64, 15>);
+    case Opcode::I64Extend32S:  return DoUnop(IntExtend<u64, 31>);
+
+    case Opcode::InterpAlloca:
+      values_.resize(values_.size() + instr.imm_u32);
+      refs_.resize(refs_.size() + instr.imm_u32);
+      break;
+
+    case Opcode::InterpBrUnless:
+      if (!Pop<u32>()) {
+        pc = instr.imm_u32;
+      }
+      break;
+
+    case Opcode::InterpCallHost: {
+      Ref new_func_ref = inst->funcs()[instr.imm_u32];
+      RefPtr<Func> new_func{store, new_func_ref};
+      return DoCall(new_func, out_trap);
+    }
+
+    case Opcode::InterpDropKeep: {
+      auto drop = instr.imm_u32x2.fst;
+      auto keep = instr.imm_u32x2.snd;
+      std::move(values_.end() - keep, values_.end(), values_.end() - drop - keep);
+      std::move(refs_.end() - keep, refs_.end(), refs_.end() - drop - keep);
+      values_.resize(values_.size() - drop);
+      refs_.resize(refs_.size() - drop);
+      break;
+    }
+
+    // The following opcodes are either never generated or should never be
+    // executed.
+    case Opcode::Block:
+    case Opcode::Loop:
+    case Opcode::If:
+    case Opcode::Else:
+    case Opcode::End:
+    case Opcode::ReturnCall:
+    case Opcode::SelectT:
+
+    case Opcode::Try:
+    case Opcode::Catch:
+    case Opcode::Throw:
+    case Opcode::Rethrow:
+    case Opcode::BrOnExn:
+    case Opcode::InterpData:
+    case Opcode::Invalid:
+      WABT_UNREACHABLE;
+      break;
+  }
+
   return RunResult::Ok;
 }
 
