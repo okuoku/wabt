@@ -482,6 +482,10 @@ inline const RefVec& Table::elements() const {
   return elements_;
 }
 
+inline u32 Table::size() const {
+  return static_cast<u32>(elements_.size());
+}
+
 //// Memory ////
 // static
 inline bool Memory::classof(const Object* obj) {
@@ -672,6 +676,22 @@ inline const RefVec& Instance::events() const {
 
 inline const RefVec& Instance::exports() const {
   return exports_;
+}
+
+inline const std::vector<ElemSegment>& Instance::elems() const {
+  return elems_;
+}
+
+inline std::vector<ElemSegment>& Instance::elems() {
+  return elems_;
+}
+
+inline const std::vector<DataSegment>& Instance::datas() const {
+  return datas_;
+}
+
+inline std::vector<DataSegment>& Instance::datas() {
+  return datas_;
 }
 
 //// Thread ////

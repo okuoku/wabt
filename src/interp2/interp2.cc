@@ -907,6 +907,11 @@ void Thread::Push(Value value) {
   refs_.push_back(false);
 }
 
+void Thread::Push(Ref ref) {
+  values_.push_back(Value(ref));
+  refs_.push_back(true);
+}
+
 #define TRAP(msg) *out_trap = Trap::New(store, (msg), frames_), RunResult::Trap
 #define TRAP_IF(cond, msg)     \
   if (WABT_UNLIKELY((cond))) { \
@@ -976,6 +981,18 @@ RunResult Thread::DoReinterpret() {
   return RunResult::Ok;
 }
 
+template <typename R, typename T>
+R IntTruncSat(T val) {
+  if (WABT_UNLIKELY(std::isnan(val))) {
+    return 0;
+  } else if (WABT_UNLIKELY(!CanConvert<R>(val))) {
+    return std::signbit(val) ? std::numeric_limits<R>::min()
+                             : std::numeric_limits<R>::max();
+  } else {
+    return static_cast<R>(val);
+  }
+}
+
 template <typename T, typename V>
 RunResult Thread::DoLoad(Store& store,
                          RefPtr<Instance>& inst,
@@ -1002,6 +1019,148 @@ RunResult Thread::DoStore(Store& store,
   TRAP_IF(Failed(memory->Store(offset, instr.imm_u32x2.snd, val)),
           StringPrintf("access at %u+%u >= max value %u", offset,
                        instr.imm_u32x2.snd, memory->ByteSize()));
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoMemoryInit(Store& store,
+                               RefPtr<Instance>& inst,
+                               Instr instr,
+                               RefPtr<Trap>* out_trap) {
+  RefPtr<Memory> memory{store, inst->memories()[instr.imm_u32x2.fst]};
+  auto&& data = inst->datas()[instr.imm_u32x2.snd];
+  auto size = Pop<u32>();
+  auto src = Pop<u32>();
+  auto dst = Pop<u32>();
+  TRAP_IF(Failed(memory->Init(dst, data, src, size)),
+          "memory.init out of bounds");
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoDataDrop(RefPtr<Instance>& inst, Instr instr) {
+  inst->datas()[instr.imm_u32].Drop();
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoMemoryCopy(Store& store,
+                               RefPtr<Instance>& inst,
+                               Instr instr,
+                               RefPtr<Trap>* out_trap) {
+  RefPtr<Memory> mem_dst{store, inst->memories()[instr.imm_u32x2.fst]};
+  RefPtr<Memory> mem_src{store, inst->memories()[instr.imm_u32x2.snd]};
+  auto size = Pop<u32>();
+  auto src = Pop<u32>();
+  auto dst = Pop<u32>();
+  TRAP_IF(Failed(Memory::Copy(*mem_dst, dst, *mem_src, src, size)),
+          "memory.copy out of bounds");
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoMemoryFill(Store& store,
+                               RefPtr<Instance>& inst,
+                               Instr instr,
+                               RefPtr<Trap>* out_trap) {
+  RefPtr<Memory> memory{store, inst->memories()[instr.imm_u32]};
+  auto size = Pop<u32>();
+  auto value = Pop<u32>();
+  auto dst = Pop<u32>();
+  TRAP_IF(Failed(memory->Fill(dst, value, size)), "memory.fill out of bounds");
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableInit(Store& store,
+                              RefPtr<Instance>& inst,
+                              Instr instr,
+                              RefPtr<Trap>* out_trap) {
+  RefPtr<Table> table{store, inst->tables()[instr.imm_u32x2.fst]};
+  auto&& elem = inst->elems()[instr.imm_u32x2.snd];
+  auto size = Pop<u32>();
+  auto src = Pop<u32>();
+  auto dst = Pop<u32>();
+  TRAP_IF(Failed(table->Init(store, dst, elem, src, size)),
+          "table.init out of bounds");
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoElemDrop(RefPtr<Instance>& inst, Instr instr) {
+  inst->elems()[instr.imm_u32].Drop();
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableCopy(Store& store,
+                              RefPtr<Instance>& inst,
+                              Instr instr,
+                              RefPtr<Trap>* out_trap) {
+  RefPtr<Table> table_dst{store, inst->tables()[instr.imm_u32x2.fst]};
+  RefPtr<Table> table_src{store, inst->tables()[instr.imm_u32x2.snd]};
+  auto size = Pop<u32>();
+  auto src = Pop<u32>();
+  auto dst = Pop<u32>();
+  TRAP_IF(Failed(Table::Copy(store, *table_dst, dst, *table_src, src, size)),
+          "table.copy out of bounds");
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableGet(Store& store,
+                             RefPtr<Instance>& inst,
+                             Instr instr,
+                             RefPtr<Trap>* out_trap) {
+  RefPtr<Table> table{store, inst->tables()[instr.imm_u32]};
+  auto index = Pop<u32>();
+  Ref ref;
+  TRAP_IF(
+      Failed(table->Get(index, &ref)),
+      StringPrintf("table.get at %u >= max value %u", index, table->size()));
+  Push(ref);
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableSet(Store& store,
+                             RefPtr<Instance>& inst,
+                             Instr instr,
+                             RefPtr<Trap>* out_trap) {
+  RefPtr<Table> table{store, inst->tables()[instr.imm_u32]};
+  auto ref = Pop<Ref>();
+  auto index = Pop<u32>();
+  TRAP_IF(
+      Failed(table->Set(store, index, ref)),
+      StringPrintf("table.set at %u >= max value %u", index, table->size()));
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableGrow(Store& store,
+                              RefPtr<Instance>& inst,
+                              Instr instr,
+                              RefPtr<Trap>* out_trap) {
+  RefPtr<Table> table{store, inst->tables()[instr.imm_u32]};
+  u32 old_size = table->size();
+  auto delta = Pop<u32>();
+  auto ref = Pop<Ref>();
+  if (Failed(table->Grow(store, delta, ref))) {
+    Push<s32>(-1);
+  } else {
+    Push<u32>(old_size);
+  }
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableSize(Store& store,
+                              RefPtr<Instance>& inst,
+                              Instr instr) {
+  RefPtr<Table> table{store, inst->tables()[instr.imm_u32]};
+  Push<u32>(table->size());
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoTableFill(Store& store,
+                              RefPtr<Instance>& inst,
+                              Instr instr,
+                              RefPtr<Trap>* out_trap) {
+  RefPtr<Table> table{store, inst->tables()[instr.imm_u32]};
+  auto size = Pop<u32>();
+  auto value = Pop<Ref>();
+  auto dst = Pop<u32>();
+  TRAP_IF(Failed(table->Fill(store, dst, value, size)),
+          "table.fill out of bounds");
   return RunResult::Ok;
 }
 
@@ -1134,9 +1293,6 @@ RunResult Thread::StepInternal(Store& store,
   switch (instr.op) {
     case Opcode::Unreachable:
       return TRAP("unreachable executed");
-
-    case Opcode::Nop:
-      break;
 
     case Opcode::Br:
       pc = instr.imm_u32;
@@ -1441,8 +1597,32 @@ RunResult Thread::StepInternal(Store& store,
       break;
     }
 
+    case Opcode::I32TruncSatF32S: return DoUnop(IntTruncSat<s32, f32>);
+    case Opcode::I32TruncSatF32U: return DoUnop(IntTruncSat<u32, f32>);
+    case Opcode::I32TruncSatF64S: return DoUnop(IntTruncSat<s32, f64>);
+    case Opcode::I32TruncSatF64U: return DoUnop(IntTruncSat<u32, f64>);
+    case Opcode::I64TruncSatF32S: return DoUnop(IntTruncSat<s64, f32>);
+    case Opcode::I64TruncSatF32U: return DoUnop(IntTruncSat<u64, f32>);
+    case Opcode::I64TruncSatF64S: return DoUnop(IntTruncSat<s64, f64>);
+    case Opcode::I64TruncSatF64U: return DoUnop(IntTruncSat<u64, f64>);
+
+    case Opcode::MemoryInit: return DoMemoryInit(store, inst, instr, out_trap);
+    case Opcode::DataDrop:   return DoDataDrop(inst, instr);
+    case Opcode::MemoryCopy: return DoMemoryCopy(store, inst, instr, out_trap);
+    case Opcode::MemoryFill: return DoMemoryFill(store, inst, instr, out_trap);
+
+    case Opcode::TableInit: return DoTableInit(store, inst, instr, out_trap);
+    case Opcode::ElemDrop:  return DoElemDrop(inst, instr);
+    case Opcode::TableCopy: return DoTableCopy(store, inst, instr, out_trap);
+    case Opcode::TableGet:  return DoTableGet(store, inst, instr, out_trap);
+    case Opcode::TableSet:  return DoTableSet(store, inst, instr, out_trap);
+    case Opcode::TableGrow: return DoTableGrow(store, inst, instr, out_trap);
+    case Opcode::TableSize: return DoTableSize(store, inst, instr);
+    case Opcode::TableFill: return DoTableFill(store, inst, instr, out_trap);
+
     // The following opcodes are either never generated or should never be
     // executed.
+    case Opcode::Nop:
     case Opcode::Block:
     case Opcode::Loop:
     case Opcode::If:

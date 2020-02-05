@@ -623,6 +623,7 @@ class Table : public Extern {
 
   const TableDesc& desc() const;
   const RefVec& elements() const;
+  u32 size() const;
 
  private:
   friend Store;
@@ -794,6 +795,10 @@ class Instance : public Object {
   const RefVec& globals() const;
   const RefVec& events() const;
   const RefVec& exports() const;
+  const std::vector<ElemSegment>& elems() const;
+  std::vector<ElemSegment>& elems();
+  const std::vector<DataSegment>& datas() const;
+  std::vector<DataSegment>& datas();
 
  private:
   friend Store;
@@ -867,6 +872,7 @@ class Thread : public Object {
   template <typename T>
   void Push(T);
   void Push(Value);
+  void Push(Ref);
 
   template <typename R, typename T>
   using UnopFunc = R(T);
@@ -895,6 +901,20 @@ class Thread : public Object {
   RunResult DoLoad(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
   template <typename T, typename V = T>
   RunResult DoStore(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+
+  RunResult DoMemoryInit(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+  RunResult DoDataDrop(RefPtr<Instance>&, Instr);
+  RunResult DoMemoryCopy(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+  RunResult DoMemoryFill(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+
+  RunResult DoTableInit(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+  RunResult DoElemDrop(RefPtr<Instance>&, Instr);
+  RunResult DoTableCopy(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+  RunResult DoTableGet(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+  RunResult DoTableSet(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+  RunResult DoTableGrow(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+  RunResult DoTableSize(Store&, RefPtr<Instance>&, Instr);
+  RunResult DoTableFill(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
 
   RunResult StepInternal(Store&,
                          RefPtr<Instance>&,
