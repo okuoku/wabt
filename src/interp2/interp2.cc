@@ -1615,6 +1615,18 @@ RunResult Thread::StepInternal(Store& store,
     case Opcode::TableSize: return DoTableSize(store, inst, instr);
     case Opcode::TableFill: return DoTableFill(store, inst, instr, out_trap);
 
+    case Opcode::RefNull:
+      Push<Ref>(Ref::Null);
+      break;
+
+    case Opcode::RefIsNull:
+      Push(Pop<Ref>() == Ref::Null);
+      break;
+
+    case Opcode::RefFunc:
+      Push(inst->funcs()[instr.imm_u32]);
+      break;
+
     // The following opcodes are either never generated or should never be
     // executed.
     case Opcode::Nop:
