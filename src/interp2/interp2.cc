@@ -171,6 +171,12 @@ Result CanGrow(const Limits& limits, u32 old_size, u32 delta, u32* new_size) {
 }
 
 //// Store ////
+Store::Store() {
+  Ref ref{objects_.New(new Object(ObjectKind::Null))};
+  assert(ref == Ref::Null);
+  roots_.New(ref);
+}
+
 bool Store::HasValueType(Ref ref, ValueType type) const {
   // TODO opt?
   if (!IsValid(ref)) {

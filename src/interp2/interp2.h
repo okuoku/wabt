@@ -346,6 +346,8 @@ class Store {
   using ObjectList = FreeList<std::unique_ptr<Object>>;
   using RootList = FreeList<Ref>;
 
+  explicit Store();
+
   bool IsValid(Ref) const;
   bool HasValueType(Ref, ValueType) const;
   template <typename T>
@@ -454,7 +456,7 @@ class Object {
  protected:
   friend Store;
   explicit Object(ObjectKind);
-  virtual void Mark(Store&) = 0;
+  virtual void Mark(Store&) {}
 
   ObjectKind kind_;
   Finalizer finalizer_ = nullptr;
