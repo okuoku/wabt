@@ -125,6 +125,24 @@ struct Ref {
 };
 using RefVec = std::vector<Ref>;
 
+template <typename T, u8 L>
+struct Simd {
+  using LaneType = T;
+  static const u8 lanes = L;
+
+  T v[L];
+};
+using s8x16 = Simd<s8, 16>;
+using u8x16 = Simd<u8, 16>;
+using s16x8 = Simd<s16, 8>;
+using u16x8 = Simd<u16, 8>;
+using s32x4 = Simd<s32, 4>;
+using u32x4 = Simd<u32, 4>;
+using s64x2 = Simd<s64, 2>;
+using u64x2 = Simd<u64, 2>;
+using f32x4 = Simd<f32, 4>;
+using f64x2 = Simd<f64, 2>;
+
 //// Types ////
 
 using Limits = wabt::Limits;
@@ -415,6 +433,8 @@ union Value {
   explicit Value(f64);
   explicit Value(v128);
   explicit Value(Ref);
+  template <typename T, u8 L>
+  explicit Value(Simd<T, L>);
 
   template <typename T>
   T Get() const;
@@ -929,6 +949,22 @@ class Thread : public Object {
   RunResult DoTableGrow(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
   RunResult DoTableSize(Store&, Instance::Ptr&, Instr);
   RunResult DoTableFill(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+
+  template <typename R, typename T>
+  RunResult DoSimdSplat();
+  template <typename R, typename T>
+  RunResult DoSimdExtract(Instr);
+  template <typename R, typename T>
+  RunResult DoSimdReplace(Instr);
+
+  template <typename S, typename R, typename T>
+  RunResult DoSimdUnop(UnopFunc<R, T>);
+  template <typename S, typename R, typename T>
+  RunResult DoSimdBinop(BinopFunc<R, T>);
+  template <typename S, u8 count>
+  RunResult DoSimdIsTrue();
+  template <typename S, typename R, typename T>
+  RunResult DoSimdShift(BinopFunc<R, T>);
 
   RunResult StepInternal(Store&,
                          Instance::Ptr&,

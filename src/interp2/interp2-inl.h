@@ -282,6 +282,13 @@ inline Value::Value(f64 val) : f64_(val) {}
 inline Value::Value(v128 val): v128_(val) {}
 inline Value::Value(Ref val): ref_(val) {}
 
+template <typename T, u8 L>
+Value::Value(Simd<T, L> val) : v128_(Bitcast<v128>(val)) {}
+
+template <> inline s8 Value::Get<s8>() const { return i32_; }
+template <> inline u8 Value::Get<u8>() const { return i32_; }
+template <> inline s16 Value::Get<s16>() const { return i32_; }
+template <> inline u16 Value::Get<u16>() const { return i32_; }
 template <> inline s32 Value::Get<s32>() const { return i32_; }
 template <> inline u32 Value::Get<u32>() const { return i32_; }
 template <> inline s64 Value::Get<s64>() const { return i64_; }
@@ -290,6 +297,17 @@ template <> inline f32 Value::Get<f32>() const { return f32_; }
 template <> inline f64 Value::Get<f64>() const { return f64_; }
 template <> inline v128 Value::Get<v128>() const { return v128_; }
 template <> inline Ref Value::Get<Ref>() const { return ref_; }
+
+template <> inline s8x16 Value::Get<s8x16>() const { return Bitcast<s8x16>(v128_); }
+template <> inline u8x16 Value::Get<u8x16>() const { return Bitcast<u8x16>(v128_); }
+template <> inline s16x8 Value::Get<s16x8>() const { return Bitcast<s16x8>(v128_); }
+template <> inline u16x8 Value::Get<u16x8>() const { return Bitcast<u16x8>(v128_); }
+template <> inline s32x4 Value::Get<s32x4>() const { return Bitcast<s32x4>(v128_); }
+template <> inline u32x4 Value::Get<u32x4>() const { return Bitcast<u32x4>(v128_); }
+template <> inline s64x2 Value::Get<s64x2>() const { return Bitcast<s64x2>(v128_); }
+template <> inline u64x2 Value::Get<u64x2>() const { return Bitcast<u64x2>(v128_); }
+template <> inline f32x4 Value::Get<f32x4>() const { return Bitcast<f32x4>(v128_); }
+template <> inline f64x2 Value::Get<f64x2>() const { return Bitcast<f64x2>(v128_); }
 
 template <> inline void Value::Set<s32>(s32 val) { i32_ = val; }
 template <> inline void Value::Set<u32>(u32 val) { i32_ = val; }

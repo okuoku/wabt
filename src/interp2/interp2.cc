@@ -918,6 +918,8 @@ template <typename T> bool Ge(T lhs, T rhs) { return lhs >= rhs; }
 template <typename T> T IntClz(T val) { return Clz(val); }
 template <typename T> T IntCtz(T val) { return Ctz(val); }
 template <typename T> T IntPopcnt(T val) { return Popcount(val); }
+template <typename T> T IntNot(T val) { return ~val; }
+template <typename T> T Neg(T val) { return -val; }
 template <typename T> T Add(T lhs, T rhs) { return lhs + rhs; }
 template <typename T> T Sub(T lhs, T rhs) { return lhs - rhs; }
 template <typename T> T Mul(T lhs, T rhs) { return lhs * rhs; }
@@ -927,6 +929,13 @@ template <typename T> T IntXor(T lhs, T rhs) { return lhs ^ rhs; }
 template <typename T> T IntShl(T lhs, T rhs) { return lhs << ShiftMask(rhs); }
 template <typename T> T IntShr(T lhs, T rhs) { return lhs >> ShiftMask(rhs); }
 
+template <typename T> T EqMask(T lhs, T rhs) { return lhs == rhs ? -1 : 0; }
+template <typename T> T NeMask(T lhs, T rhs) { return lhs != rhs ? -1 : 0; }
+template <typename T> T LtMask(T lhs, T rhs) { return lhs < rhs ? -1 : 0; }
+template <typename T> T LeMask(T lhs, T rhs) { return lhs <= rhs ? -1 : 0; }
+template <typename T> T GtMask(T lhs, T rhs) { return lhs > rhs ? -1 : 0; }
+template <typename T> T GeMask(T lhs, T rhs) { return lhs >= rhs ? -1 : 0; }
+
 template <typename T>
 T IntRotl(T lhs, T rhs) {
   return (lhs << ShiftMask(rhs)) | (lhs >> ShiftMask<T>(-rhs));
@@ -935,14 +944,6 @@ T IntRotl(T lhs, T rhs) {
 template <typename T>
 T IntRotr(T lhs, T rhs) {
   return (lhs >> ShiftMask(rhs)) | (lhs << ShiftMask<T>(-rhs));
-}
-
-template <typename T, int N>
-T IntExtend(T val) {
-  // Hacker's delight 2.6 - sign extension
-  auto bit = T{1} << N;
-  auto mask = (bit << 1) - 1;
-  return ((val & mask) ^ bit) - bit;
 }
 
 // i{32,64}.{div,rem}_s are special-cased because they trap when dividing the
@@ -984,7 +985,6 @@ RunResult IntRem(T lhs, T rhs, T* out, std::string* out_msg) {
 }
 
 template <typename T> T FloatAbs(T val) { return std::abs(val); }
-template <typename T> T FloatNeg(T val) { return -val; }
 template <typename T> T FloatCeil(T val) { return std::ceil(val); }
 template <typename T> T FloatFloor(T val) { return std::floor(val); }
 template <typename T> T FloatTrunc(T val) { return std::trunc(val); }
@@ -1036,6 +1036,14 @@ template <> bool CanConvert<s64, f64>(f64 val) { return val >= -9223372036854775
 template <> bool CanConvert<u64, f32>(f32 val) { return val > -1.f && val < 18446744073709551616.f; }
 template <> bool CanConvert<u64, f64>(f64 val) { return val > -1. && val < 18446744073709551616.; }
 
+template <typename T, int N>
+T IntExtend(T val) {
+  // Hacker's delight 2.6 - sign extension
+  auto bit = T{1} << N;
+  auto mask = (bit << 1) - 1;
+  return ((val & mask) ^ bit) - bit;
+}
+
 template <typename R, typename T>
 R IntTruncSat(T val) {
   if (WABT_UNLIKELY(std::isnan(val))) {
@@ -1046,6 +1054,18 @@ R IntTruncSat(T val) {
   } else {
     return static_cast<R>(val);
   }
+}
+
+template <typename T>
+T IntAddSat(T lhs, T rhs) {
+  // TODO
+  return lhs + rhs;
+}
+
+template <typename T>
+T IntSubSat(T lhs, T rhs) {
+  // TODO
+  return lhs - rhs;
 }
 
 RunResult Thread::StepInternal(Store& store,
@@ -1272,7 +1292,7 @@ RunResult Thread::StepInternal(Store& store,
     case Opcode::I64Rotr:   return DoBinop(IntRotr<u64>);
 
     case Opcode::F32Abs:     return DoUnop(FloatAbs<f32>);
-    case Opcode::F32Neg:     return DoUnop(FloatNeg<f32>);
+    case Opcode::F32Neg:     return DoUnop(Neg<f32>);
     case Opcode::F32Ceil:    return DoUnop(FloatCeil<f32>);
     case Opcode::F32Floor:   return DoUnop(FloatFloor<f32>);
     case Opcode::F32Trunc:   return DoUnop(FloatTrunc<f32>);
@@ -1287,7 +1307,7 @@ RunResult Thread::StepInternal(Store& store,
     case Opcode::F32Copysign: return DoBinop(FloatCopysign<f32>);
 
     case Opcode::F64Abs:     return DoUnop(FloatAbs<f64>);
-    case Opcode::F64Neg:     return DoUnop(FloatNeg<f64>);
+    case Opcode::F64Neg:     return DoUnop(Neg<f64>);
     case Opcode::F64Ceil:    return DoUnop(FloatCeil<f64>);
     case Opcode::F64Floor:   return DoUnop(FloatFloor<f64>);
     case Opcode::F64Trunc:   return DoUnop(FloatTrunc<f64>);
@@ -1395,6 +1415,159 @@ RunResult Thread::StepInternal(Store& store,
     case Opcode::RefFunc:
       Push(inst->funcs()[instr.imm_u32]);
       break;
+
+    case Opcode::V128Load:
+      return DoLoad<v128>(store, inst, instr, out_trap);
+
+    case Opcode::V128Store:
+      return DoStore<v128>(store, inst, instr, out_trap);
+
+    case Opcode::V128Const:
+      Push<v128>(instr.imm_v128);
+      break;
+
+    case Opcode::I8X16Splat:        return DoSimdSplat<u8x16, u32>();
+    case Opcode::I8X16ExtractLaneS: return DoSimdExtract<s8x16, s32>(instr);
+    case Opcode::I8X16ExtractLaneU: return DoSimdExtract<u8x16, u32>(instr);
+    case Opcode::I8X16ReplaceLane:  return DoSimdReplace<u8x16, u32>(instr);
+    case Opcode::I16X8Splat:        return DoSimdSplat<u16x8, u32>();
+    case Opcode::I16X8ExtractLaneS: return DoSimdExtract<s16x8, s32>(instr);
+    case Opcode::I16X8ExtractLaneU: return DoSimdExtract<u16x8, u32>(instr);
+    case Opcode::I16X8ReplaceLane:  return DoSimdReplace<u16x8, u32>(instr);
+    case Opcode::I32X4Splat:        return DoSimdSplat<u32x4, u32>();
+    case Opcode::I32X4ExtractLane:  return DoSimdExtract<s32x4, u32>(instr);
+    case Opcode::I32X4ReplaceLane:  return DoSimdReplace<u32x4, u32>(instr);
+    case Opcode::I64X2Splat:        return DoSimdSplat<u64x2, u64>();
+    case Opcode::I64X2ExtractLane:  return DoSimdExtract<u64x2, u64>(instr);
+    case Opcode::I64X2ReplaceLane:  return DoSimdReplace<u64x2, u64>(instr);
+    case Opcode::F32X4Splat:        return DoSimdSplat<f32x4, f32>();
+    case Opcode::F32X4ExtractLane:  return DoSimdExtract<f32x4, f32>(instr);
+    case Opcode::F32X4ReplaceLane:  return DoSimdReplace<f32x4, f32>(instr);
+    case Opcode::F64X2Splat:        return DoSimdSplat<f64x2, f64>();
+    case Opcode::F64X2ExtractLane:  return DoSimdExtract<f64x2, f64>(instr);
+    case Opcode::F64X2ReplaceLane:  return DoSimdReplace<f64x2, f64>(instr);
+
+    case Opcode::I8X16Eq:  return DoSimdBinop<u8x16>(EqMask<u8>);
+    case Opcode::I8X16Ne:  return DoSimdBinop<u8x16>(NeMask<u8>);
+    case Opcode::I8X16LtS: return DoSimdBinop<u8x16>(LtMask<s8>);
+    case Opcode::I8X16LtU: return DoSimdBinop<u8x16>(LtMask<u8>);
+    case Opcode::I8X16GtS: return DoSimdBinop<u8x16>(GtMask<s8>);
+    case Opcode::I8X16GtU: return DoSimdBinop<u8x16>(GtMask<u8>);
+    case Opcode::I8X16LeS: return DoSimdBinop<u8x16>(LeMask<s8>);
+    case Opcode::I8X16LeU: return DoSimdBinop<u8x16>(LeMask<u8>);
+    case Opcode::I8X16GeS: return DoSimdBinop<u8x16>(GeMask<s8>);
+    case Opcode::I8X16GeU: return DoSimdBinop<u8x16>(GeMask<u8>);
+    case Opcode::I16X8Eq:  return DoSimdBinop<u16x8>(EqMask<u16>);
+    case Opcode::I16X8Ne:  return DoSimdBinop<u16x8>(NeMask<u16>);
+    case Opcode::I16X8LtS: return DoSimdBinop<s16x8>(LtMask<s16>);
+    case Opcode::I16X8LtU: return DoSimdBinop<u16x8>(LtMask<u16>);
+    case Opcode::I16X8GtS: return DoSimdBinop<s16x8>(GtMask<s16>);
+    case Opcode::I16X8GtU: return DoSimdBinop<u16x8>(GtMask<u16>);
+    case Opcode::I16X8LeS: return DoSimdBinop<s16x8>(LeMask<s16>);
+    case Opcode::I16X8LeU: return DoSimdBinop<u16x8>(LeMask<u16>);
+    case Opcode::I16X8GeS: return DoSimdBinop<s16x8>(GeMask<s16>);
+    case Opcode::I16X8GeU: return DoSimdBinop<u16x8>(GeMask<u16>);
+    case Opcode::I32X4Eq:  return DoSimdBinop<u32x4>(EqMask<u32>);
+    case Opcode::I32X4Ne:  return DoSimdBinop<u32x4>(NeMask<u32>);
+    case Opcode::I32X4LtS: return DoSimdBinop<s32x4>(LtMask<s32>);
+    case Opcode::I32X4LtU: return DoSimdBinop<u32x4>(LtMask<u32>);
+    case Opcode::I32X4GtS: return DoSimdBinop<s32x4>(GtMask<s32>);
+    case Opcode::I32X4GtU: return DoSimdBinop<u32x4>(GtMask<u32>);
+    case Opcode::I32X4LeS: return DoSimdBinop<s32x4>(LeMask<s32>);
+    case Opcode::I32X4LeU: return DoSimdBinop<u32x4>(LeMask<u32>);
+    case Opcode::I32X4GeS: return DoSimdBinop<s32x4>(GeMask<s32>);
+    case Opcode::I32X4GeU: return DoSimdBinop<u32x4>(GeMask<u32>);
+    case Opcode::F32X4Eq:  return DoSimdBinop<f32x4>(EqMask<f32>);
+    case Opcode::F32X4Ne:  return DoSimdBinop<f32x4>(NeMask<f32>);
+    case Opcode::F32X4Lt:  return DoSimdBinop<f32x4>(LtMask<f32>);
+    case Opcode::F32X4Gt:  return DoSimdBinop<f32x4>(GtMask<f32>);
+    case Opcode::F32X4Le:  return DoSimdBinop<f32x4>(LeMask<f32>);
+    case Opcode::F32X4Ge:  return DoSimdBinop<f32x4>(GeMask<f32>);
+    case Opcode::F64X2Eq:  return DoSimdBinop<f64x2>(EqMask<f64>);
+    case Opcode::F64X2Ne:  return DoSimdBinop<f64x2>(NeMask<f64>);
+    case Opcode::F64X2Lt:  return DoSimdBinop<f64x2>(LtMask<f64>);
+    case Opcode::F64X2Gt:  return DoSimdBinop<f64x2>(GtMask<f64>);
+    case Opcode::F64X2Le:  return DoSimdBinop<f64x2>(LeMask<f64>);
+    case Opcode::F64X2Ge:  return DoSimdBinop<f64x2>(GeMask<f64>);
+
+    case Opcode::V128Not:  return DoSimdUnop<u64x2>(IntNot<u64>);
+    case Opcode::V128And:  return DoSimdBinop<u64x2>(IntAnd<u64>);
+    case Opcode::V128Or:   return DoSimdBinop<u64x2>(IntOr<u64>);
+    case Opcode::V128Xor:  return DoSimdBinop<u64x2>(IntXor<u64>);
+
+    case Opcode::V128BitSelect: /* TODO */ break;
+
+    case Opcode::I8X16Neg:          return DoSimdUnop<u8x16>(Neg<u8>);
+    case Opcode::I8X16AnyTrue:      return DoSimdIsTrue<u8x16, 1>();
+    case Opcode::I8X16AllTrue:      return DoSimdIsTrue<u8x16, 16>();
+    case Opcode::I8X16Shl:          return DoSimdShift<u8x16>(IntShl<u8>);
+    case Opcode::I8X16ShrS:         return DoSimdShift<u8x16>(IntShr<s8>);
+    case Opcode::I8X16ShrU:         return DoSimdShift<u8x16>(IntShr<u8>);
+    case Opcode::I8X16Add:          return DoSimdBinop<u8x16>(Add<u8>);
+    case Opcode::I8X16AddSaturateS: return DoSimdBinop<u8x16>(IntAddSat<s8>);
+    case Opcode::I8X16AddSaturateU: return DoSimdBinop<u8x16>(IntAddSat<u8>);
+    case Opcode::I8X16Sub:          return DoSimdBinop<u8x16>(Sub<u8>);
+    case Opcode::I8X16SubSaturateS: return DoSimdBinop<u8x16>(IntSubSat<s8>);
+    case Opcode::I8X16SubSaturateU: return DoSimdBinop<u8x16>(IntSubSat<u8>);
+    case Opcode::I8X16Mul:          return DoSimdBinop<u8x16>(Mul<u8>);
+
+    case Opcode::I16X8Neg:          return DoSimdUnop<u16x8>(Neg<u16>);
+    case Opcode::I16X8AnyTrue:      return DoSimdIsTrue<u16x8, 1>();
+    case Opcode::I16X8AllTrue:      return DoSimdIsTrue<u16x8, 8>();
+    case Opcode::I16X8Shl:          return DoSimdShift<u16x8>(IntShl<u16>);
+    case Opcode::I16X8ShrS:         return DoSimdShift<u16x8>(IntShr<s16>);
+    case Opcode::I16X8ShrU:         return DoSimdShift<u16x8>(IntShr<u16>);
+    case Opcode::I16X8Add:          return DoSimdBinop<u16x8>(Add<u16>);
+    case Opcode::I16X8AddSaturateS: return DoSimdBinop<u16x8>(IntAddSat<s16>);
+    case Opcode::I16X8AddSaturateU: return DoSimdBinop<u16x8>(IntAddSat<u16>);
+    case Opcode::I16X8Sub:          return DoSimdBinop<u16x8>(Sub<u16>);
+    case Opcode::I16X8SubSaturateS: return DoSimdBinop<u16x8>(IntSubSat<s16>);
+    case Opcode::I16X8SubSaturateU: return DoSimdBinop<u16x8>(IntSubSat<u16>);
+    case Opcode::I16X8Mul:          return DoSimdBinop<u16x8>(Mul<u16>);
+
+    case Opcode::I32X4Neg:          return DoSimdUnop<u32x4>(Neg<u32>);
+    case Opcode::I32X4AnyTrue:      return DoSimdIsTrue<u32x4, 1>();
+    case Opcode::I32X4AllTrue:      return DoSimdIsTrue<u32x4, 4>();
+    case Opcode::I32X4Shl:          return DoSimdShift<u32x4>(IntShl<u32>);
+    case Opcode::I32X4ShrS:         return DoSimdShift<u32x4>(IntShr<s32>);
+    case Opcode::I32X4ShrU:         return DoSimdShift<u32x4>(IntShr<u32>);
+    case Opcode::I32X4Add:          return DoSimdBinop<u32x4>(Add<u32>);
+    case Opcode::I32X4Sub:          return DoSimdBinop<u32x4>(Sub<u32>);
+    case Opcode::I32X4Mul:          return DoSimdBinop<u32x4>(Mul<u32>);
+
+    case Opcode::I64X2Neg:          return DoSimdUnop<u64x2>(Neg<u64>);
+    case Opcode::I64X2AnyTrue:      return DoSimdIsTrue<u64x2, 1>();
+    case Opcode::I64X2AllTrue:      return DoSimdIsTrue<u64x2, 2>();
+    case Opcode::I64X2Shl:          return DoSimdShift<u64x2>(IntShl<u64>);
+    case Opcode::I64X2ShrS:         return DoSimdShift<u64x2>(IntShr<s64>);
+    case Opcode::I64X2ShrU:         return DoSimdShift<u64x2>(IntShr<u64>);
+    case Opcode::I64X2Add:          return DoSimdBinop<u64x2>(Add<u64>);
+    case Opcode::I64X2Sub:          return DoSimdBinop<u64x2>(Sub<u64>);
+
+    case Opcode::F32X4Abs:          return DoSimdUnop<f32x4>(FloatAbs<f32>);
+    case Opcode::F32X4Neg:          return DoSimdUnop<f32x4>(Neg<f32>);
+    case Opcode::F32X4Sqrt:         return DoSimdUnop<f32x4>(FloatSqrt<f32>);
+    case Opcode::F32X4Add:          return DoSimdBinop<f32x4>(Add<f32>);
+    case Opcode::F32X4Sub:          return DoSimdBinop<f32x4>(Sub<f32>);
+    case Opcode::F32X4Mul:          return DoSimdBinop<f32x4>(Mul<f32>);
+    case Opcode::F32X4Div:          return DoSimdBinop<f32x4>(FloatDiv<f32>);
+    case Opcode::F32X4Min:          return DoSimdBinop<f32x4>(FloatMin<f32>);
+    case Opcode::F32X4Max:          return DoSimdBinop<f32x4>(FloatMax<f32>);
+
+    case Opcode::F64X2Abs:          return DoSimdUnop<f64x2>(FloatAbs<f64>);
+    case Opcode::F64X2Neg:          return DoSimdUnop<f64x2>(Neg<f64>);
+    case Opcode::F64X2Sqrt:         return DoSimdUnop<f64x2>(FloatSqrt<f64>);
+    case Opcode::F64X2Add:          return DoSimdBinop<f64x2>(Add<f64>);
+    case Opcode::F64X2Sub:          return DoSimdBinop<f64x2>(Sub<f64>);
+    case Opcode::F64X2Mul:          return DoSimdBinop<f64x2>(Mul<f64>);
+    case Opcode::F64X2Div:          return DoSimdBinop<f64x2>(FloatDiv<f64>);
+    case Opcode::F64X2Min:          return DoSimdBinop<f64x2>(FloatMin<f64>);
+    case Opcode::F64X2Max:          return DoSimdBinop<f64x2>(FloatMax<f64>);
+
+    case Opcode::I32X4TruncSatF32X4S: return DoSimdUnop<s32x4>(IntTruncSat<s32, f32>);
+    case Opcode::I32X4TruncSatF32X4U: return DoSimdUnop<u32x4>(IntTruncSat<u32, f32>);
+    case Opcode::I64X2TruncSatF64X2S: return DoSimdUnop<s64x2>(IntTruncSat<s64, f64>);
+    case Opcode::I64X2TruncSatF64X2U: return DoSimdUnop<u64x2>(IntTruncSat<u64, f64>);
 
     // The following opcodes are either never generated or should never be
     // executed.
@@ -1649,6 +1822,72 @@ RunResult Thread::DoTableFill(Store& store,
   auto dst = Pop<u32>();
   TRAP_IF(Failed(table->Fill(store, dst, value, size)),
           "table.fill out of bounds");
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoSimdSplat() {
+  auto val = Pop<T>();
+  R result;
+  std::fill(std::begin(result.v), std::end(result.v), val);
+  Push(result);
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoSimdExtract(Instr instr) {
+  Push<T>(Pop<R>().v[instr.imm_u8]);
+  return RunResult::Ok;
+}
+
+template <typename R, typename T>
+RunResult Thread::DoSimdReplace(Instr instr) {
+  auto val = Pop<T>();
+  auto simd = Pop<R>();
+  simd.v[instr.imm_u8] = val;
+  Push(simd);
+  return RunResult::Ok;
+}
+
+template <typename S, typename R, typename T>
+RunResult Thread::DoSimdUnop(UnopFunc<R, T> f) {
+  auto val = Pop<S>();
+  S result;
+  std::transform(std::begin(val.v), std::end(val.v), std::begin(result.v), f);
+  Push(val);
+  return RunResult::Ok;
+}
+
+template <typename S, typename R, typename T>
+RunResult Thread::DoSimdBinop(BinopFunc<R, T> f) {
+  auto rhs = Pop<S>();
+  auto lhs = Pop<S>();
+  S result;
+  for (u8 i = 0; i < S::lanes; ++i) {
+    result.v[i] = f(lhs.v[i], rhs.v[i]);
+  }
+  Push(result);
+  return RunResult::Ok;
+}
+
+template <typename S, u8 count>
+RunResult Thread::DoSimdIsTrue() {
+  using L = typename S::LaneType;
+  auto val = Pop<S>();
+  Push(std::count_if(std::begin(val.v), std::end(val.v),
+                     [](L x) { return x != 0; }) >= count);
+  return RunResult::Ok;
+}
+
+template <typename S, typename R, typename T>
+RunResult Thread::DoSimdShift(BinopFunc<R, T> f) {
+  auto amount = Pop<T>();
+  auto lhs = Pop<S>();
+  S result;
+  for (u8 i = 0; i < S::lanes; ++i) {
+    result.v[i] = f(lhs.v[i], amount);
+  }
+  Push(result);
   return RunResult::Ok;
 }
 
