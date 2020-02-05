@@ -928,6 +928,8 @@ template <typename T> T IntOr(T lhs, T rhs) { return lhs | rhs; }
 template <typename T> T IntXor(T lhs, T rhs) { return lhs ^ rhs; }
 template <typename T> T IntShl(T lhs, T rhs) { return lhs << ShiftMask(rhs); }
 template <typename T> T IntShr(T lhs, T rhs) { return lhs >> ShiftMask(rhs); }
+template <typename T> T IntAndNot(T lhs, T rhs) { return lhs & ~rhs; }
+template <typename T> T IntAvgr(T lhs, T rhs) { return (lhs + rhs + 1) / 2; }
 
 template <typename T> T EqMask(T lhs, T rhs) { return lhs == rhs ? -1 : 0; }
 template <typename T> T NeMask(T lhs, T rhs) { return lhs != rhs ? -1 : 0; }
@@ -1036,6 +1038,12 @@ template <> bool CanConvert<s64, f64>(f64 val) { return val >= -9223372036854775
 template <> bool CanConvert<u64, f32>(f32 val) { return val > -1.f && val < 18446744073709551616.f; }
 template <> bool CanConvert<u64, f64>(f64 val) { return val > -1. && val < 18446744073709551616.; }
 
+template <typename R, typename T>
+R Convert(T val) {
+  assert((CanConvert<R, T>(val)));
+  return static_cast<R>(val);
+}
+
 template <typename T, int N>
 T IntExtend(T val) {
   // Hacker's delight 2.6 - sign extension
@@ -1056,16 +1064,28 @@ R IntTruncSat(T val) {
   }
 }
 
-template <typename T>
-T IntAddSat(T lhs, T rhs) {
-  // TODO
-  return lhs + rhs;
+template <typename T> struct SatPromote;
+template <> struct SatPromote<s8> { using type = s32; };
+template <> struct SatPromote<s16> { using type = s32; };
+template <> struct SatPromote<u8> { using type = u32; };
+template <> struct SatPromote<u16> { using type = u32; };
+
+template <typename R, typename T>
+R Saturate(T val) {
+  static_assert(sizeof(R) < sizeof(T), "Incorrect types for Saturate");
+  const T min = std::numeric_limits<R>::min();
+  const T max = std::numeric_limits<R>::max();
+  return val > max ? max : val < min ? min : val;
 }
 
-template <typename T>
+template <typename T, typename U = typename SatPromote<T>::type>
+T IntAddSat(T lhs, T rhs) {
+  return Saturate<T, U>(lhs + rhs);
+}
+
+template <typename T, typename U = typename SatPromote<T>::type>
 T IntSubSat(T lhs, T rhs) {
-  // TODO
-  return lhs - rhs;
+  return Saturate<T, U>(lhs - rhs);
 }
 
 RunResult Thread::StepInternal(Store& store,
@@ -1490,12 +1510,11 @@ RunResult Thread::StepInternal(Store& store,
     case Opcode::F64X2Le:  return DoSimdBinop<f64x2>(LeMask<f64>);
     case Opcode::F64X2Ge:  return DoSimdBinop<f64x2>(GeMask<f64>);
 
-    case Opcode::V128Not:  return DoSimdUnop<u64x2>(IntNot<u64>);
-    case Opcode::V128And:  return DoSimdBinop<u64x2>(IntAnd<u64>);
-    case Opcode::V128Or:   return DoSimdBinop<u64x2>(IntOr<u64>);
-    case Opcode::V128Xor:  return DoSimdBinop<u64x2>(IntXor<u64>);
-
-    case Opcode::V128BitSelect: /* TODO */ break;
+    case Opcode::V128Not:       return DoSimdUnop<u64x2>(IntNot<u64>);
+    case Opcode::V128And:       return DoSimdBinop<u64x2>(IntAnd<u64>);
+    case Opcode::V128Or:        return DoSimdBinop<u64x2>(IntOr<u64>);
+    case Opcode::V128Xor:       return DoSimdBinop<u64x2>(IntXor<u64>);
+    case Opcode::V128BitSelect: return DoSimdBitSelect();
 
     case Opcode::I8X16Neg:          return DoSimdUnop<u8x16>(Neg<u8>);
     case Opcode::I8X16AnyTrue:      return DoSimdIsTrue<u8x16, 1>();
@@ -1568,6 +1587,42 @@ RunResult Thread::StepInternal(Store& store,
     case Opcode::I32X4TruncSatF32X4U: return DoSimdUnop<u32x4>(IntTruncSat<u32, f32>);
     case Opcode::I64X2TruncSatF64X2S: return DoSimdUnop<s64x2>(IntTruncSat<s64, f64>);
     case Opcode::I64X2TruncSatF64X2U: return DoSimdUnop<u64x2>(IntTruncSat<u64, f64>);
+    case Opcode::F32X4ConvertI32X4S:  return DoSimdUnop<f32x4>(Convert<f32, s32>);
+    case Opcode::F32X4ConvertI32X4U:  return DoSimdUnop<f32x4>(Convert<f32, u32>);
+    case Opcode::F64X2ConvertI64X2S:  return DoSimdUnop<f64x2>(Convert<f64, s64>);
+    case Opcode::F64X2ConvertI64X2U:  return DoSimdUnop<f64x2>(Convert<f64, u64>);
+
+    case Opcode::V8X16Swizzle:     return DoSimdSwizzle();
+    case Opcode::V8X16Shuffle:     return DoSimdShuffle(instr);
+
+    case Opcode::I8X16LoadSplat:   return DoSimdLoadSplat<u8x16, u32>(store, inst, instr, out_trap);
+    case Opcode::I16X8LoadSplat:   return DoSimdLoadSplat<u16x8, u32>(store, inst, instr, out_trap);
+    case Opcode::I32X4LoadSplat:   return DoSimdLoadSplat<u32x4, u32>(store, inst, instr, out_trap);
+    case Opcode::I64X2LoadSplat:   return DoSimdLoadSplat<u64x2, u64>(store, inst, instr, out_trap);
+
+    case Opcode::I8X16NarrowI16X8S:    return DoSimdNarrow<s8x16, s16x8>();
+    case Opcode::I8X16NarrowI16X8U:    return DoSimdNarrow<u8x16, u16x8>();
+    case Opcode::I16X8NarrowI32X4S:    return DoSimdNarrow<s16x8, s32x4>();
+    case Opcode::I16X8NarrowI32X4U:    return DoSimdNarrow<u16x8, u32x4>();
+    case Opcode::I16X8WidenLowI8X16S:  return DoSimdWiden<s16x8, s8x16, true>();
+    case Opcode::I16X8WidenHighI8X16S: return DoSimdWiden<s16x8, s8x16, false>();
+    case Opcode::I16X8WidenLowI8X16U:  return DoSimdWiden<u16x8, u8x16, true>();
+    case Opcode::I16X8WidenHighI8X16U: return DoSimdWiden<u16x8, u8x16, false>();
+    case Opcode::I32X4WidenLowI16X8S:  return DoSimdWiden<s32x4, s16x8, true>();
+    case Opcode::I32X4WidenHighI16X8S: return DoSimdWiden<s32x4, s16x8, false>();
+    case Opcode::I32X4WidenLowI16X8U:  return DoSimdWiden<u32x4, u16x8, true>();
+    case Opcode::I32X4WidenHighI16X8U: return DoSimdWiden<u32x4, u16x8, false>();
+
+    case Opcode::I16X8Load8X8S: /* TODO */ break;
+    case Opcode::I16X8Load8X8U: /* TODO */ break;
+    case Opcode::I32X4Load16X4S: /* TODO */ break;
+    case Opcode::I32X4Load16X4U: /* TODO */ break;
+    case Opcode::I64X2Load32X2S: /* TODO */ break;
+    case Opcode::I64X2Load32X2U: /* TODO */ break;
+
+    case Opcode::V128Andnot: return DoSimdBinop<u64x2>(IntAndNot<u64>);
+    case Opcode::I8X16AvgrU: return DoSimdBinop<u8x16>(IntAvgr<u8>);
+    case Opcode::I16X8AvgrU: return DoSimdBinop<u16x8>(IntAvgr<u16>);
 
     // The following opcodes are either never generated or should never be
     // executed.
@@ -1870,6 +1925,19 @@ RunResult Thread::DoSimdBinop(BinopFunc<R, T> f) {
   return RunResult::Ok;
 }
 
+RunResult Thread::DoSimdBitSelect() {
+  using S = u64x2;
+  auto c = Pop<S>();
+  auto rhs = Pop<S>();
+  auto lhs = Pop<S>();
+  S result;
+  for (u8 i = 0; i < S::lanes; ++i) {
+    result.v[i] = (lhs.v[i] & c.v[i]) | (rhs.v[i] & ~c.v[i]);
+  }
+  Push(result);
+  return RunResult::Ok;
+}
+
 template <typename S, u8 count>
 RunResult Thread::DoSimdIsTrue() {
   using L = typename S::LaneType;
@@ -1886,6 +1954,76 @@ RunResult Thread::DoSimdShift(BinopFunc<R, T> f) {
   S result;
   for (u8 i = 0; i < S::lanes; ++i) {
     result.v[i] = f(lhs.v[i], amount);
+  }
+  Push(result);
+  return RunResult::Ok;
+}
+
+template <typename S, typename T>
+RunResult Thread::DoSimdLoadSplat(Store& store,
+                                  Instance::Ptr& inst,
+                                  Instr instr,
+                                  Trap::Ptr* out_trap) {
+  using L = typename S::LaneType;
+  if (DoLoad<L>(store, inst, instr, out_trap) != RunResult::Ok) {
+    return RunResult::Trap;
+  }
+  return DoSimdSplat<S, T>();
+}
+
+RunResult Thread::DoSimdSwizzle() {
+  using S = u8x16;
+  auto rhs = Pop<S>();
+  auto lhs = Pop<S>();
+  S result;
+  for (u8 i = 0; i < S::lanes; ++i) {
+    result.v[i] = rhs.v[i] < S::lanes ? lhs.v[rhs.v[i]] : 0;
+  }
+  Push(result);
+  return RunResult::Ok;
+}
+
+RunResult Thread::DoSimdShuffle(Instr instr) {
+  using S = u8x16;
+  auto sel = instr.imm_v128;
+  auto rhs = Pop<S>();
+  auto lhs = Pop<S>();
+  S result;
+  for (u8 i = 0; i < S::lanes; ++i) {
+    result.v[i] =
+        sel.v[i] < S::lanes ? lhs.v[sel.v[i]] : rhs.v[sel.v[i] - S::lanes];
+  }
+  Push(result);
+  return RunResult::Ok;
+}
+
+template <typename S, typename T>
+RunResult Thread::DoSimdNarrow() {
+  using SL = typename S::LaneType;
+  using TL = typename T::LaneType;
+  auto rhs = Pop<T>();
+  auto lhs = Pop<T>();
+  S result;
+  for (u8 i = 0; i < T::lanes; ++i) {
+    result.v[i] = Saturate<SL, TL>(lhs.v[i]);
+  }
+  for (u8 i = 0; i < T::lanes; ++i) {
+    result.v[T::lanes + i] = Saturate<SL, TL>(rhs.v[i]);
+  }
+  Push(result);
+  return RunResult::Ok;
+}
+
+template <typename S, typename T, bool low>
+RunResult Thread::DoSimdWiden() {
+  using SL = typename S::LaneType;
+  using TL = typename T::LaneType;
+  static_assert(std::is_signed<SL>::value == std::is_signed<TL>::value,
+                "Both lanes must be signed");
+  auto val = Pop<T>();
+  S result;
+  for (u8 i = 0; i < S::lanes; ++i) {
+    result.v[i] = val.v[(low ? 0 : S::lanes) + i];
   }
   Push(result);
   return RunResult::Ok;

@@ -961,10 +961,19 @@ class Thread : public Object {
   RunResult DoSimdUnop(UnopFunc<R, T>);
   template <typename S, typename R, typename T>
   RunResult DoSimdBinop(BinopFunc<R, T>);
+  RunResult DoSimdBitSelect();
   template <typename S, u8 count>
   RunResult DoSimdIsTrue();
   template <typename S, typename R, typename T>
   RunResult DoSimdShift(BinopFunc<R, T>);
+  template <typename S, typename T>
+  RunResult DoSimdLoadSplat(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoSimdSwizzle();
+  RunResult DoSimdShuffle(Instr);
+  template <typename S, typename T>
+  RunResult DoSimdNarrow();
+  template <typename S, typename T, bool low>
+  RunResult DoSimdWiden();
 
   RunResult StepInternal(Store&,
                          Instance::Ptr&,
