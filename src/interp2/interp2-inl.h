@@ -162,7 +162,7 @@ template <typename T>
 RefPtr<T>::RefPtr(Store& store, Ref ref) {
   assert(store.Is<T>(ref));
   root_index_ = store.NewRoot(ref);
-  obj_ = static_cast<T*>(store.objects.Get(ref.index).get());
+  obj_ = static_cast<T*>(store.objects_.Get(ref.index).get());
   store_ = &store;
 }
 
@@ -242,7 +242,7 @@ const T& RefPtr<T>::operator*() const {
 
 template <typename T>
 Ref RefPtr<T>::ref() const {
-  return store_ ? store_->roots.Get(root_index_) : Ref::Null;
+  return store_ ? store_->roots_.Get(root_index_) : Ref::Null;
 }
 
 //// ValueType ////
@@ -302,12 +302,12 @@ template <> inline void Value::Set<Ref>(Ref val) { ref_ = val; }
 
 //// Store ////
 inline bool Store::IsValid(Ref ref) const {
-  return objects.IsValid(ref.index) && objects.Get(ref.index);
+  return objects_.IsValid(ref.index) && objects_.Get(ref.index);
 }
 
 template <typename T>
 bool Store::Is(Ref ref) const {
-  return objects.IsValid(ref.index) && isa<T>(objects.Get(ref.index).get());
+  return objects_.IsValid(ref.index) && isa<T>(objects_.Get(ref.index).get());
 }
 
 template <typename T>
@@ -326,7 +326,7 @@ RefPtr<T> Store::UnsafeGet(Ref ref) {
 
 template <typename T, typename... Args>
 RefPtr<T> Store::Alloc(Args&&... args) {
-  Ref ref{objects.New(new T(std::forward<Args>(args)...))};
+  Ref ref{objects_.New(new T(std::forward<Args>(args)...))};
   RefPtr<T> ptr{*this, ref};
   ptr->self_ = ref;
   return ptr;

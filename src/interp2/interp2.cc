@@ -180,7 +180,7 @@ bool Store::HasValueType(Ref ref, ValueType type) const {
     return true;
   }
 
-  Object* obj = objects.Get(ref.index).get();
+  Object* obj = objects_.Get(ref.index).get();
   switch (type) {
     case ValueType::Funcref:
       return obj->kind() == ObjectKind::DefinedFunc ||
@@ -195,29 +195,29 @@ bool Store::HasValueType(Ref ref, ValueType type) const {
 }
 
 Store::RootList::Index Store::NewRoot(Ref ref) {
-  return roots.New(ref);
+  return roots_.New(ref);
 }
 
 Store::RootList::Index Store::CopyRoot(RootList::Index index) {
-  return roots.New(roots.Get(index));
+  return roots_.New(roots_.Get(index));
 }
 
 void Store::DeleteRoot(RootList::Index index) {
-  roots.Delete(index);
+  roots_.Delete(index);
 }
 
 void Store::Collect() {
-  std::fill(marks.begin(), marks.end(), false);
-  Mark(roots.list);
-  for (size_t i = 0; i < marks.size(); ++i) {
-    if (!marks[i]) {
-      objects.Delete(i);
+  std::fill(marks_.begin(), marks_.end(), false);
+  Mark(roots_.list);
+  for (size_t i = 0; i < marks_.size(); ++i) {
+    if (!marks_[i]) {
+      objects_.Delete(i);
     }
   }
 }
 
 void Store::Mark(Ref ref) {
-  marks[ref.index] = true;
+  marks_[ref.index] = true;
 }
 
 void Store::Mark(const RefVec& refs) {

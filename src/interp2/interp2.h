@@ -366,9 +366,13 @@ class Store {
   void Mark(Ref);
   void Mark(const RefVec&);
 
-  ObjectList objects;
-  RootList roots;
-  std::vector<bool> marks;
+ private:
+  template <typename T>
+  friend class RefPtr;
+
+  ObjectList objects_;
+  RootList roots_;
+  std::vector<bool> marks_;
 };
 
 template <typename T>
