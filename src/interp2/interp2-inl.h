@@ -246,7 +246,7 @@ Ref RefPtr<T>::ref() const {
 }
 
 //// ValueType ////
-inline bool IsReference(ValueType type) { return type >= ValueType::Anyref; }
+inline bool IsReference(ValueType type) { return IsRefType(type); }
 template <> inline bool HasType<s32>(ValueType type) { return type == ValueType::I32; }
 template <> inline bool HasType<u32>(ValueType type) { return type == ValueType::I32; }
 template <> inline bool HasType<s64>(ValueType type) { return type == ValueType::I64; }
@@ -273,23 +273,32 @@ inline bool TypesMatch(ValueType expected, ValueType actual) {
 }
 
 //// Value ////
-template <> inline s32 Value::Get<s32>() const { return i32; }
-template <> inline u32 Value::Get<u32>() const { return i32; }
-template <> inline s64 Value::Get<s64>() const { return i64; }
-template <> inline u64 Value::Get<u64>() const { return i64; }
-template <> inline f32 Value::Get<f32>() const { return f32; }
-template <> inline f64 Value::Get<f64>() const { return f64; }
-template <> inline v128 Value::Get<v128>() const { return v128; }
-template <> inline Ref Value::Get<Ref>() const { return ref; }
+inline Value::Value(s32 val) : i32_(val) {}
+inline Value::Value(u32 val) : i32_(val) {}
+inline Value::Value(s64 val) : i64_(val) {}
+inline Value::Value(u64 val) : i64_(val) {}
+inline Value::Value(f32 val) : f32_(val) {}
+inline Value::Value(f64 val) : f64_(val) {}
+inline Value::Value(v128 val): v128_(val) {}
+inline Value::Value(Ref val): ref_(val) {}
 
-template <> inline void Value::Set<s32>(s32 val) { i32 = val; }
-template <> inline void Value::Set<u32>(u32 val) { i32 = val; }
-template <> inline void Value::Set<s64>(s64 val) { i64 = val; }
-template <> inline void Value::Set<u64>(u64 val) { i64 = val; }
-template <> inline void Value::Set<interp2::f32>(interp2::f32 val) { f32 = val; }
-template <> inline void Value::Set<interp2::f64>(interp2::f64 val) { f64 = val; }
-template <> inline void Value::Set<interp2::v128>(interp2::v128 val) { v128 = val; }
-template <> inline void Value::Set<Ref>(Ref val) { ref = val; }
+template <> inline s32 Value::Get<s32>() const { return i32_; }
+template <> inline u32 Value::Get<u32>() const { return i32_; }
+template <> inline s64 Value::Get<s64>() const { return i64_; }
+template <> inline u64 Value::Get<u64>() const { return i64_; }
+template <> inline f32 Value::Get<f32>() const { return f32_; }
+template <> inline f64 Value::Get<f64>() const { return f64_; }
+template <> inline v128 Value::Get<v128>() const { return v128_; }
+template <> inline Ref Value::Get<Ref>() const { return ref_; }
+
+template <> inline void Value::Set<s32>(s32 val) { i32_ = val; }
+template <> inline void Value::Set<u32>(u32 val) { i32_ = val; }
+template <> inline void Value::Set<s64>(s64 val) { i64_ = val; }
+template <> inline void Value::Set<u64>(u64 val) { i64_ = val; }
+template <> inline void Value::Set<f32>(f32 val) { f32_ = val; }
+template <> inline void Value::Set<f64>(f64 val) { f64_ = val; }
+template <> inline void Value::Set<v128>(v128 val) { v128_ = val; }
+template <> inline void Value::Set<Ref>(Ref val) { ref_ = val; }
 
 //// Store ////
 inline bool Store::IsValid(Ref ref) const {
@@ -328,7 +337,7 @@ inline TypedValue::TypedValue(ValueType type, Value value)
 inline TypedValue::TypedValue(Store& store, ValueType type, Value value)
     : type(type), value(value) {
   if (IsReference(type)) {
-    ref = RefPtr<Object>(store, value.ref);
+    ref = RefPtr<Object>(store, value.ref_);
   }
 }
 

@@ -410,12 +410,12 @@ union Value {
   template <typename T>
   void Set(T);
 
-  u32 i32;
-  u64 i64;
-  f32 f32;
-  f64 f64;
-  v128 v128;
-  Ref ref;
+  u32 i32_;
+  u64 i64_;
+  f32 f32_;
+  f64 f64_;
+  v128 v128_;
+  Ref ref_;
 };
 
 struct TypedValue {

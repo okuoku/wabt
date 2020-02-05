@@ -523,7 +523,7 @@ Global::Global(Store& store, GlobalDesc desc, Value value)
 
 void Global::Mark(Store& store) {
   if (IsReference(desc_.type.type)) {
-    store.Mark(value_.ref);
+    store.Mark(value_.ref_);
   }
 }
 
@@ -779,7 +779,7 @@ void Thread::Mark(Store& store) {
   }
   for (u32 i = 0; i < refs_.size(); ++i) {
     if (refs_[i]) {
-      store.Mark(values_[i].ref);
+      store.Mark(values_[i].ref_);
     }
   }
 }
