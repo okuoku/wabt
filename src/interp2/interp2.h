@@ -878,9 +878,9 @@ class Thread : public Object {
 
   static Thread::Ptr New(Store&, const Options&);
 
-  RunResult Run(Store&, Trap::Ptr* out_trap);
-  RunResult Run(Store&, int num_instructions, Trap::Ptr* out_trap);
-  RunResult Step(Store&, Trap::Ptr* out_trap);
+  RunResult Run(Trap::Ptr* out_trap);
+  RunResult Run(int num_instructions, Trap::Ptr* out_trap);
+  RunResult Step(Trap::Ptr* out_trap);
 
  private:
   friend Store;
@@ -895,7 +895,7 @@ class Thread : public Object {
   RunResult DoReturnCall(const Func::Ptr&, Trap::Ptr* out_trap);
 
   void PushValues(const TypedValues&);
-  void CopyValues(Store&, const ValueTypes&, TypedValues*);
+  void CopyValues(const ValueTypes&, TypedValues*);
 
   Value& Pick(Index);
 
@@ -920,35 +920,35 @@ class Thread : public Object {
   template <typename R, typename T>
   RunResult DoUnop(UnopFunc<R, T>);
   template <typename R, typename T>
-  RunResult DoUnop(Store&, UnopTrapFunc<R, T>, Trap::Ptr* out_trap);
+  RunResult DoUnop(UnopTrapFunc<R, T>, Trap::Ptr* out_trap);
   template <typename R, typename T>
   RunResult DoBinop(BinopFunc<R, T>);
   template <typename R, typename T>
-  RunResult DoBinop(Store&, BinopTrapFunc<R, T>, Trap::Ptr* out_trap);
+  RunResult DoBinop(BinopTrapFunc<R, T>, Trap::Ptr* out_trap);
 
   template <typename R, typename T>
-  RunResult DoConvert(Store&, Trap::Ptr* out_trap);
+  RunResult DoConvert(Trap::Ptr* out_trap);
   template <typename R, typename T>
   RunResult DoReinterpret();
 
   template <typename T, typename V = T>
-  RunResult DoLoad(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoLoad(Instr, Trap::Ptr* out_trap);
   template <typename T, typename V = T>
-  RunResult DoStore(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoStore(Instr, Trap::Ptr* out_trap);
 
-  RunResult DoMemoryInit(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
-  RunResult DoDataDrop(Instance::Ptr&, Instr);
-  RunResult DoMemoryCopy(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
-  RunResult DoMemoryFill(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoMemoryInit(Instr, Trap::Ptr* out_trap);
+  RunResult DoDataDrop(Instr);
+  RunResult DoMemoryCopy(Instr, Trap::Ptr* out_trap);
+  RunResult DoMemoryFill(Instr, Trap::Ptr* out_trap);
 
-  RunResult DoTableInit(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
-  RunResult DoElemDrop(Instance::Ptr&, Instr);
-  RunResult DoTableCopy(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
-  RunResult DoTableGet(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
-  RunResult DoTableSet(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
-  RunResult DoTableGrow(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
-  RunResult DoTableSize(Store&, Instance::Ptr&, Instr);
-  RunResult DoTableFill(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoTableInit(Instr, Trap::Ptr* out_trap);
+  RunResult DoElemDrop(Instr);
+  RunResult DoTableCopy(Instr, Trap::Ptr* out_trap);
+  RunResult DoTableGet(Instr, Trap::Ptr* out_trap);
+  RunResult DoTableSet(Instr, Trap::Ptr* out_trap);
+  RunResult DoTableGrow(Instr, Trap::Ptr* out_trap);
+  RunResult DoTableSize(Instr);
+  RunResult DoTableFill(Instr, Trap::Ptr* out_trap);
 
   template <typename R, typename T>
   RunResult DoSimdSplat();
@@ -967,7 +967,7 @@ class Thread : public Object {
   template <typename S, typename R, typename T>
   RunResult DoSimdShift(BinopFunc<R, T>);
   template <typename S, typename T>
-  RunResult DoSimdLoadSplat(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoSimdLoadSplat(Instr, Trap::Ptr* out_trap);
   RunResult DoSimdSwizzle();
   RunResult DoSimdShuffle(Instr);
   template <typename S, typename T>
@@ -975,14 +975,16 @@ class Thread : public Object {
   template <typename S, typename T, bool low>
   RunResult DoSimdWiden();
 
-  RunResult StepInternal(Store&,
-                         Instance::Ptr&,
-                         Module::Ptr&,
-                         Trap::Ptr* out_trap);
+  RunResult StepInternal(Trap::Ptr* out_trap);
 
   std::vector<Frame> frames_;
   std::vector<Value> values_;
-  std::vector<bool> refs_;
+  std::vector<bool> refs_; // TODO: use vector of index into values_ instead
+
+  // Cached for convenience.
+  Store& store_;
+  Instance::Ptr inst_;
+  Module::Ptr mod_;
 };
 
 }  // namespace interp2

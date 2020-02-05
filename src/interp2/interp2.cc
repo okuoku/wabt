@@ -311,11 +311,11 @@ Result DefinedFunc::Call(Store& store,
   assert(params.size() == type_.params.size());
   thread->PushValues(params);
   thread->PushCall(self_, desc_.code_offset);
-  RunResult result = thread->Run(store, out_trap);
+  RunResult result = thread->Run(out_trap);
   if (result == RunResult::Trap) {
     return Result::Error;
   }
-  thread->CopyValues(store, type_.results, out_results);
+  thread->CopyValues(type_.results, out_results);
   return Result::Ok;
 }
 
@@ -781,7 +781,8 @@ void Instance::Mark(Store& store) {
 }
 
 //// Thread ////
-Thread::Thread(Store&, const Options& options) : Object(skind) {
+Thread::Thread(Store& store, const Options& options)
+    : Object(skind), store_(store) {
   frames_.reserve(options.call_stack_size);
   values_.reserve(options.value_stack_size);
   refs_.reserve(options.value_stack_size);
@@ -822,32 +823,30 @@ RunResult Thread::DoReturnCall(const Func::Ptr& func, Trap::Ptr* out_trap) {
   return RunResult::Ok;
 }
 
-void Thread::CopyValues(Store& store,
-                        const ValueTypes& types,
-                        TypedValues* out_values) {
+void Thread::CopyValues(const ValueTypes& types, TypedValues* out_values) {
   assert(values_.size() == types.size());
   out_values->clear();
   out_values->reserve(values_.size());
   for (size_t i = 0; i < values_.size(); ++i) {
-    out_values->emplace_back(store, types[i], values_[i]);
+    out_values->emplace_back(store_, types[i], values_[i]);
   }
 }
 
-RunResult Thread::Run(Store& store, Trap::Ptr* out_trap) {
+RunResult Thread::Run(Trap::Ptr* out_trap) {
   const int kDefaultInstructionCount = 1000;
   RunResult result;
   do {
-    result = Run(store, kDefaultInstructionCount, out_trap);
+    result = Run(kDefaultInstructionCount, out_trap);
   } while (result == RunResult::Ok);
   return result;
 }
 
-RunResult Thread::Run(Store& store, int num_instructions, Trap::Ptr* out_trap) {
-  DefinedFunc::Ptr func{store, frames_.back().func};
-  Instance::Ptr inst{store, func->instance()};
-  Module::Ptr mod{store, inst->module()};
+RunResult Thread::Run(int num_instructions, Trap::Ptr* out_trap) {
+  DefinedFunc::Ptr func{store_, frames_.back().func};
+  inst_ = store_.UnsafeGet<Instance>(func->instance());
+  mod_ = store_.UnsafeGet<Module>(inst_->module());
   for (;num_instructions > 0; --num_instructions) {
-    auto result = StepInternal(store, inst, mod, out_trap);
+    auto result = StepInternal(out_trap);
     if (result != RunResult::Ok) {
       return result;
     }
@@ -855,11 +854,11 @@ RunResult Thread::Run(Store& store, int num_instructions, Trap::Ptr* out_trap) {
   return RunResult::Ok;
 }
 
-RunResult Thread::Step(Store& store, Trap::Ptr* out_trap) {
-  DefinedFunc::Ptr func{store, frames_.back().func};
-  Instance::Ptr inst{store, func->instance()};
-  Module::Ptr mod{store, inst->module()};
-  return StepInternal(store, inst, mod, out_trap);
+RunResult Thread::Step(Trap::Ptr* out_trap) {
+  DefinedFunc::Ptr func{store_, frames_.back().func};
+  inst_ = store_.UnsafeGet<Instance>(func->instance());
+  mod_ = store_.UnsafeGet<Module>(inst_->module());
+  return StepInternal(out_trap);
 }
 
 Value& Thread::Pick(Index index) {
@@ -899,7 +898,7 @@ void Thread::Push(Ref ref) {
   refs_.push_back(true);
 }
 
-#define TRAP(msg) *out_trap = Trap::New(store, (msg), frames_), RunResult::Trap
+#define TRAP(msg) *out_trap = Trap::New(store_, (msg), frames_), RunResult::Trap
 #define TRAP_IF(cond, msg)     \
   if (WABT_UNLIKELY((cond))) { \
     return TRAP(msg);          \
@@ -1088,27 +1087,26 @@ T IntSubSat(T lhs, T rhs) {
   return Saturate<T, U>(lhs - rhs);
 }
 
-RunResult Thread::StepInternal(Store& store,
-                               Instance::Ptr& inst,
-                               Module::Ptr& mod,
-                               Trap::Ptr* out_trap) {
+RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
+  using O = Opcode;
+
   u32& pc = frames_.back().offset;
-  auto instr = mod->desc().istream.Read(&pc);
+  auto instr = mod_->desc().istream.Read(&pc);
   switch (instr.op) {
-    case Opcode::Unreachable:
+    case O::Unreachable:
       return TRAP("unreachable executed");
 
-    case Opcode::Br:
+    case O::Br:
       pc = instr.imm_u32;
       break;
 
-    case Opcode::BrIf:
+    case O::BrIf:
       if (Pop<u32>()) {
         pc = instr.imm_u32;
       }
       break;
 
-    case Opcode::BrTable: {
+    case O::BrTable: {
       auto key = Pop<u32>();
       if (key >= instr.imm_u32) {
         key = instr.imm_u32;
@@ -1117,39 +1115,39 @@ RunResult Thread::StepInternal(Store& store,
       break;
     }
 
-    case Opcode::Return:
+    case O::Return:
       return PopCall();
 
-    case Opcode::Call: {
-      Ref new_func_ref = inst->funcs()[instr.imm_u32];
-      DefinedFunc::Ptr new_func{store, new_func_ref};
+    case O::Call: {
+      Ref new_func_ref = inst_->funcs()[instr.imm_u32];
+      DefinedFunc::Ptr new_func{store_, new_func_ref};
       PushCall(new_func_ref, new_func->desc().code_offset);
       break;
     }
 
-    case Opcode::CallIndirect:
-    case Opcode::ReturnCallIndirect: {
-      Table::Ptr table{store, inst->tables()[instr.imm_u32x2.fst]};
-      auto&& func_type = mod->desc().func_types[instr.imm_u32x2.snd];
+    case O::CallIndirect:
+    case O::ReturnCallIndirect: {
+      Table::Ptr table{store_, inst_->tables()[instr.imm_u32x2.fst]};
+      auto&& func_type = mod_->desc().func_types[instr.imm_u32x2.snd];
       auto entry = Pop<u32>();
       TRAP_IF(entry >= table->elements().size(), "undefined table index");
       auto new_func_ref = table->elements()[entry];
       TRAP_IF(new_func_ref == Ref::Null, "uninitialized table element");
-      Func::Ptr new_func{store, new_func_ref};
+      Func::Ptr new_func{store_, new_func_ref};
       TRAP_IF(Failed(Match(new_func->func_type(), func_type, nullptr)),
               "call indirect func type mismatch");
-      if (instr.op == Opcode::ReturnCallIndirect) {
+      if (instr.op == O::ReturnCallIndirect) {
         return DoReturnCall(new_func, out_trap);
       } else {
         return DoCall(new_func, out_trap);
       }
     }
 
-    case Opcode::Drop:
+    case O::Drop:
       Pop();
       break;
 
-    case Opcode::Select: {
+    case O::Select: {
       auto cond = Pop<u32>();
       Value false_ = Pop();
       Value true_ = Pop();
@@ -1157,65 +1155,65 @@ RunResult Thread::StepInternal(Store& store,
       break;
     }
 
-    case Opcode::LocalGet:
+    case O::LocalGet:
       Push(Pick(instr.imm_u32));
       break;
 
-    case Opcode::LocalSet: {
+    case O::LocalSet: {
       auto value = Pop();
       Pick(instr.imm_u32) = value;
       break;
     }
 
-    case Opcode::LocalTee:
+    case O::LocalTee:
       Pick(instr.imm_u32) = Pick(1);
       break;
 
-    case Opcode::GlobalGet: {
-      Global::Ptr global{store, inst->globals()[instr.imm_u32]};
+    case O::GlobalGet: {
+      Global::Ptr global{store_, inst_->globals()[instr.imm_u32]};
       Push(global->Get());
       break;
     }
 
-    case Opcode::GlobalSet: {
-      Global::Ptr global{store, inst->globals()[instr.imm_u32]};
+    case O::GlobalSet: {
+      Global::Ptr global{store_, inst_->globals()[instr.imm_u32]};
       global->UnsafeSet(Pop());
       break;
     }
 
-    case Opcode::I32Load:    return DoLoad<u32>(store, inst, instr, out_trap);
-    case Opcode::I64Load:    return DoLoad<u64>(store, inst, instr, out_trap);
-    case Opcode::F32Load:    return DoLoad<f32>(store, inst, instr, out_trap);
-    case Opcode::F64Load:    return DoLoad<f64>(store, inst, instr, out_trap);
-    case Opcode::I32Load8S:  return DoLoad<s8, s32>(store, inst, instr, out_trap);
-    case Opcode::I32Load8U:  return DoLoad<u8, u32>(store, inst, instr, out_trap);
-    case Opcode::I32Load16S: return DoLoad<s16, s32>(store, inst, instr, out_trap);
-    case Opcode::I32Load16U: return DoLoad<u16, u32>(store, inst, instr, out_trap);
-    case Opcode::I64Load8S:  return DoLoad<s8, s64>(store, inst, instr, out_trap);
-    case Opcode::I64Load8U:  return DoLoad<u8, u64>(store, inst, instr, out_trap);
-    case Opcode::I64Load16S: return DoLoad<s16, s64>(store, inst, instr, out_trap);
-    case Opcode::I64Load16U: return DoLoad<u16, u64>(store, inst, instr, out_trap);
-    case Opcode::I64Load32S: return DoLoad<s32, s64>(store, inst, instr, out_trap);
-    case Opcode::I64Load32U: return DoLoad<u32, u64>(store, inst, instr, out_trap);
+    case O::I32Load:    return DoLoad<u32>(instr, out_trap);
+    case O::I64Load:    return DoLoad<u64>(instr, out_trap);
+    case O::F32Load:    return DoLoad<f32>(instr, out_trap);
+    case O::F64Load:    return DoLoad<f64>(instr, out_trap);
+    case O::I32Load8S:  return DoLoad<s8, s32>(instr, out_trap);
+    case O::I32Load8U:  return DoLoad<u8, u32>(instr, out_trap);
+    case O::I32Load16S: return DoLoad<s16, s32>(instr, out_trap);
+    case O::I32Load16U: return DoLoad<u16, u32>(instr, out_trap);
+    case O::I64Load8S:  return DoLoad<s8, s64>(instr, out_trap);
+    case O::I64Load8U:  return DoLoad<u8, u64>(instr, out_trap);
+    case O::I64Load16S: return DoLoad<s16, s64>(instr, out_trap);
+    case O::I64Load16U: return DoLoad<u16, u64>(instr, out_trap);
+    case O::I64Load32S: return DoLoad<s32, s64>(instr, out_trap);
+    case O::I64Load32U: return DoLoad<u32, u64>(instr, out_trap);
 
-    case Opcode::I32Store:   return DoStore<u32>(store, inst, instr, out_trap);
-    case Opcode::I64Store:   return DoStore<u64>(store, inst, instr, out_trap);
-    case Opcode::F32Store:   return DoStore<f32>(store, inst, instr, out_trap);
-    case Opcode::F64Store:   return DoStore<f64>(store, inst, instr, out_trap);
-    case Opcode::I32Store8:  return DoStore<u8, u32>(store, inst, instr, out_trap);
-    case Opcode::I32Store16: return DoStore<u16, u32>(store, inst, instr, out_trap);
-    case Opcode::I64Store8:  return DoStore<u8, u64>(store, inst, instr, out_trap);
-    case Opcode::I64Store16: return DoStore<u16, u64>(store, inst, instr, out_trap);
-    case Opcode::I64Store32: return DoStore<u32, u64>(store, inst, instr, out_trap);
+    case O::I32Store:   return DoStore<u32>(instr, out_trap);
+    case O::I64Store:   return DoStore<u64>(instr, out_trap);
+    case O::F32Store:   return DoStore<f32>(instr, out_trap);
+    case O::F64Store:   return DoStore<f64>(instr, out_trap);
+    case O::I32Store8:  return DoStore<u8, u32>(instr, out_trap);
+    case O::I32Store16: return DoStore<u16, u32>(instr, out_trap);
+    case O::I64Store8:  return DoStore<u8, u64>(instr, out_trap);
+    case O::I64Store16: return DoStore<u16, u64>(instr, out_trap);
+    case O::I64Store32: return DoStore<u32, u64>(instr, out_trap);
 
-    case Opcode::MemorySize: {
-      Memory::Ptr memory{store, inst->memories()[instr.imm_u32]};
+    case O::MemorySize: {
+      Memory::Ptr memory{store_, inst_->memories()[instr.imm_u32]};
       Push(memory->PageSize());
       break;
     }
 
-    case Opcode::MemoryGrow: {
-      Memory::Ptr memory{store, inst->memories()[instr.imm_u32]};
+    case O::MemoryGrow: {
+      Memory::Ptr memory{store_, inst_->memories()[instr.imm_u32]};
       u32 old_size = memory->PageSize();
       if (Failed(memory->Grow(Pop<u32>()))) {
         Push<s32>(-1);
@@ -1225,173 +1223,173 @@ RunResult Thread::StepInternal(Store& store,
       break;
     }
 
-    case Opcode::I32Const:
-    case Opcode::F32Const:
+    case O::I32Const:
+    case O::F32Const:
       Push<u32>(instr.imm_u32);
       break;
 
-    case Opcode::I64Const:
-    case Opcode::F64Const:
+    case O::I64Const:
+    case O::F64Const:
       Push<u64>(instr.imm_u64);
       break;
 
-    case Opcode::I32Eqz: return DoUnop(IntEqz<u32>);
-    case Opcode::I32Eq:  return DoBinop(Eq<u32>);
-    case Opcode::I32Ne:  return DoBinop(Ne<u32>);
-    case Opcode::I32LtS: return DoBinop(Lt<s32>);
-    case Opcode::I32LtU: return DoBinop(Lt<u32>);
-    case Opcode::I32GtS: return DoBinop(Gt<s32>);
-    case Opcode::I32GtU: return DoBinop(Gt<u32>);
-    case Opcode::I32LeS: return DoBinop(Le<s32>);
-    case Opcode::I32LeU: return DoBinop(Le<u32>);
-    case Opcode::I32GeS: return DoBinop(Ge<s32>);
-    case Opcode::I32GeU: return DoBinop(Ge<u32>);
+    case O::I32Eqz: return DoUnop(IntEqz<u32>);
+    case O::I32Eq:  return DoBinop(Eq<u32>);
+    case O::I32Ne:  return DoBinop(Ne<u32>);
+    case O::I32LtS: return DoBinop(Lt<s32>);
+    case O::I32LtU: return DoBinop(Lt<u32>);
+    case O::I32GtS: return DoBinop(Gt<s32>);
+    case O::I32GtU: return DoBinop(Gt<u32>);
+    case O::I32LeS: return DoBinop(Le<s32>);
+    case O::I32LeU: return DoBinop(Le<u32>);
+    case O::I32GeS: return DoBinop(Ge<s32>);
+    case O::I32GeU: return DoBinop(Ge<u32>);
 
-    case Opcode::I64Eqz: return DoUnop(IntEqz<u64>);
-    case Opcode::I64Eq:  return DoBinop(Eq<u64>);
-    case Opcode::I64Ne:  return DoBinop(Ne<u64>);
-    case Opcode::I64LtS: return DoBinop(Lt<s64>);
-    case Opcode::I64LtU: return DoBinop(Lt<u64>);
-    case Opcode::I64GtS: return DoBinop(Gt<s64>);
-    case Opcode::I64GtU: return DoBinop(Gt<u64>);
-    case Opcode::I64LeS: return DoBinop(Le<s64>);
-    case Opcode::I64LeU: return DoBinop(Le<u64>);
-    case Opcode::I64GeS: return DoBinop(Ge<s64>);
-    case Opcode::I64GeU: return DoBinop(Ge<u64>);
+    case O::I64Eqz: return DoUnop(IntEqz<u64>);
+    case O::I64Eq:  return DoBinop(Eq<u64>);
+    case O::I64Ne:  return DoBinop(Ne<u64>);
+    case O::I64LtS: return DoBinop(Lt<s64>);
+    case O::I64LtU: return DoBinop(Lt<u64>);
+    case O::I64GtS: return DoBinop(Gt<s64>);
+    case O::I64GtU: return DoBinop(Gt<u64>);
+    case O::I64LeS: return DoBinop(Le<s64>);
+    case O::I64LeU: return DoBinop(Le<u64>);
+    case O::I64GeS: return DoBinop(Ge<s64>);
+    case O::I64GeU: return DoBinop(Ge<u64>);
 
-    case Opcode::F32Eq:  return DoBinop(Eq<f32>);
-    case Opcode::F32Ne:  return DoBinop(Ne<f32>);
-    case Opcode::F32Lt:  return DoBinop(Lt<f32>);
-    case Opcode::F32Gt:  return DoBinop(Gt<f32>);
-    case Opcode::F32Le:  return DoBinop(Le<f32>);
-    case Opcode::F32Ge:  return DoBinop(Ge<f32>);
+    case O::F32Eq:  return DoBinop(Eq<f32>);
+    case O::F32Ne:  return DoBinop(Ne<f32>);
+    case O::F32Lt:  return DoBinop(Lt<f32>);
+    case O::F32Gt:  return DoBinop(Gt<f32>);
+    case O::F32Le:  return DoBinop(Le<f32>);
+    case O::F32Ge:  return DoBinop(Ge<f32>);
 
-    case Opcode::F64Eq:  return DoBinop(Eq<f64>);
-    case Opcode::F64Ne:  return DoBinop(Ne<f64>);
-    case Opcode::F64Lt:  return DoBinop(Lt<f64>);
-    case Opcode::F64Gt:  return DoBinop(Gt<f64>);
-    case Opcode::F64Le:  return DoBinop(Le<f64>);
-    case Opcode::F64Ge:  return DoBinop(Ge<f64>);
+    case O::F64Eq:  return DoBinop(Eq<f64>);
+    case O::F64Ne:  return DoBinop(Ne<f64>);
+    case O::F64Lt:  return DoBinop(Lt<f64>);
+    case O::F64Gt:  return DoBinop(Gt<f64>);
+    case O::F64Le:  return DoBinop(Le<f64>);
+    case O::F64Ge:  return DoBinop(Ge<f64>);
 
-    case Opcode::I32Clz:    return DoUnop(IntClz<u32>);
-    case Opcode::I32Ctz:    return DoUnop(IntCtz<u32>);
-    case Opcode::I32Popcnt: return DoUnop(IntPopcnt<u32>);
-    case Opcode::I32Add:    return DoBinop(Add<u32>);
-    case Opcode::I32Sub:    return DoBinop(Sub<u32>);
-    case Opcode::I32Mul:    return DoBinop(Mul<u32>);
-    case Opcode::I32DivS:   return DoBinop(store, IntDiv<s32>, out_trap);
-    case Opcode::I32DivU:   return DoBinop(store, IntDiv<u32>, out_trap);
-    case Opcode::I32RemS:   return DoBinop(store, IntRem<s32>, out_trap);
-    case Opcode::I32RemU:   return DoBinop(store, IntRem<u32>, out_trap);
-    case Opcode::I32And:    return DoBinop(IntAnd<u32>);
-    case Opcode::I32Or:     return DoBinop(IntOr<u32>);
-    case Opcode::I32Xor:    return DoBinop(IntXor<u32>);
-    case Opcode::I32Shl:    return DoBinop(IntShl<u32>);
-    case Opcode::I32ShrS:   return DoBinop(IntShr<s32>);
-    case Opcode::I32ShrU:   return DoBinop(IntShr<u32>);
-    case Opcode::I32Rotl:   return DoBinop(IntRotl<u32>);
-    case Opcode::I32Rotr:   return DoBinop(IntRotr<u32>);
+    case O::I32Clz:    return DoUnop(IntClz<u32>);
+    case O::I32Ctz:    return DoUnop(IntCtz<u32>);
+    case O::I32Popcnt: return DoUnop(IntPopcnt<u32>);
+    case O::I32Add:    return DoBinop(Add<u32>);
+    case O::I32Sub:    return DoBinop(Sub<u32>);
+    case O::I32Mul:    return DoBinop(Mul<u32>);
+    case O::I32DivS:   return DoBinop(IntDiv<s32>, out_trap);
+    case O::I32DivU:   return DoBinop(IntDiv<u32>, out_trap);
+    case O::I32RemS:   return DoBinop(IntRem<s32>, out_trap);
+    case O::I32RemU:   return DoBinop(IntRem<u32>, out_trap);
+    case O::I32And:    return DoBinop(IntAnd<u32>);
+    case O::I32Or:     return DoBinop(IntOr<u32>);
+    case O::I32Xor:    return DoBinop(IntXor<u32>);
+    case O::I32Shl:    return DoBinop(IntShl<u32>);
+    case O::I32ShrS:   return DoBinop(IntShr<s32>);
+    case O::I32ShrU:   return DoBinop(IntShr<u32>);
+    case O::I32Rotl:   return DoBinop(IntRotl<u32>);
+    case O::I32Rotr:   return DoBinop(IntRotr<u32>);
 
-    case Opcode::I64Clz:    return DoUnop(IntClz<u64>);
-    case Opcode::I64Ctz:    return DoUnop(IntCtz<u64>);
-    case Opcode::I64Popcnt: return DoUnop(IntPopcnt<u64>);
-    case Opcode::I64Add:    return DoBinop(Add<u64>);
-    case Opcode::I64Sub:    return DoBinop(Sub<u64>);
-    case Opcode::I64Mul:    return DoBinop(Mul<u64>);
-    case Opcode::I64DivS:   return DoBinop(store, IntDiv<s64>, out_trap);
-    case Opcode::I64DivU:   return DoBinop(store, IntDiv<u64>, out_trap);
-    case Opcode::I64RemS:   return DoBinop(store, IntRem<s64>, out_trap);
-    case Opcode::I64RemU:   return DoBinop(store, IntRem<u64>, out_trap);
-    case Opcode::I64And:    return DoBinop(IntAnd<u64>);
-    case Opcode::I64Or:     return DoBinop(IntOr<u64>);
-    case Opcode::I64Xor:    return DoBinop(IntXor<u64>);
-    case Opcode::I64Shl:    return DoBinop(IntShl<u64>);
-    case Opcode::I64ShrS:   return DoBinop(IntShr<s64>);
-    case Opcode::I64ShrU:   return DoBinop(IntShr<u64>);
-    case Opcode::I64Rotl:   return DoBinop(IntRotl<u64>);
-    case Opcode::I64Rotr:   return DoBinop(IntRotr<u64>);
+    case O::I64Clz:    return DoUnop(IntClz<u64>);
+    case O::I64Ctz:    return DoUnop(IntCtz<u64>);
+    case O::I64Popcnt: return DoUnop(IntPopcnt<u64>);
+    case O::I64Add:    return DoBinop(Add<u64>);
+    case O::I64Sub:    return DoBinop(Sub<u64>);
+    case O::I64Mul:    return DoBinop(Mul<u64>);
+    case O::I64DivS:   return DoBinop(IntDiv<s64>, out_trap);
+    case O::I64DivU:   return DoBinop(IntDiv<u64>, out_trap);
+    case O::I64RemS:   return DoBinop(IntRem<s64>, out_trap);
+    case O::I64RemU:   return DoBinop(IntRem<u64>, out_trap);
+    case O::I64And:    return DoBinop(IntAnd<u64>);
+    case O::I64Or:     return DoBinop(IntOr<u64>);
+    case O::I64Xor:    return DoBinop(IntXor<u64>);
+    case O::I64Shl:    return DoBinop(IntShl<u64>);
+    case O::I64ShrS:   return DoBinop(IntShr<s64>);
+    case O::I64ShrU:   return DoBinop(IntShr<u64>);
+    case O::I64Rotl:   return DoBinop(IntRotl<u64>);
+    case O::I64Rotr:   return DoBinop(IntRotr<u64>);
 
-    case Opcode::F32Abs:     return DoUnop(FloatAbs<f32>);
-    case Opcode::F32Neg:     return DoUnop(Neg<f32>);
-    case Opcode::F32Ceil:    return DoUnop(FloatCeil<f32>);
-    case Opcode::F32Floor:   return DoUnop(FloatFloor<f32>);
-    case Opcode::F32Trunc:   return DoUnop(FloatTrunc<f32>);
-    case Opcode::F32Nearest: return DoUnop(FloatNearest<f32>);
-    case Opcode::F32Sqrt:    return DoUnop(FloatSqrt<f32>);
-    case Opcode::F32Add:      return DoBinop(Add<f32>);
-    case Opcode::F32Sub:      return DoBinop(Sub<f32>);
-    case Opcode::F32Mul:      return DoBinop(Mul<f32>);
-    case Opcode::F32Div:      return DoBinop(FloatDiv<f32>);
-    case Opcode::F32Min:      return DoBinop(FloatMin<f32>);
-    case Opcode::F32Max:      return DoBinop(FloatMax<f32>);
-    case Opcode::F32Copysign: return DoBinop(FloatCopysign<f32>);
+    case O::F32Abs:     return DoUnop(FloatAbs<f32>);
+    case O::F32Neg:     return DoUnop(Neg<f32>);
+    case O::F32Ceil:    return DoUnop(FloatCeil<f32>);
+    case O::F32Floor:   return DoUnop(FloatFloor<f32>);
+    case O::F32Trunc:   return DoUnop(FloatTrunc<f32>);
+    case O::F32Nearest: return DoUnop(FloatNearest<f32>);
+    case O::F32Sqrt:    return DoUnop(FloatSqrt<f32>);
+    case O::F32Add:      return DoBinop(Add<f32>);
+    case O::F32Sub:      return DoBinop(Sub<f32>);
+    case O::F32Mul:      return DoBinop(Mul<f32>);
+    case O::F32Div:      return DoBinop(FloatDiv<f32>);
+    case O::F32Min:      return DoBinop(FloatMin<f32>);
+    case O::F32Max:      return DoBinop(FloatMax<f32>);
+    case O::F32Copysign: return DoBinop(FloatCopysign<f32>);
 
-    case Opcode::F64Abs:     return DoUnop(FloatAbs<f64>);
-    case Opcode::F64Neg:     return DoUnop(Neg<f64>);
-    case Opcode::F64Ceil:    return DoUnop(FloatCeil<f64>);
-    case Opcode::F64Floor:   return DoUnop(FloatFloor<f64>);
-    case Opcode::F64Trunc:   return DoUnop(FloatTrunc<f64>);
-    case Opcode::F64Nearest: return DoUnop(FloatNearest<f64>);
-    case Opcode::F64Sqrt:    return DoUnop(FloatSqrt<f64>);
-    case Opcode::F64Add:      return DoBinop(Add<f64>);
-    case Opcode::F64Sub:      return DoBinop(Sub<f64>);
-    case Opcode::F64Mul:      return DoBinop(Mul<f64>);
-    case Opcode::F64Div:      return DoBinop(FloatDiv<f64>);
-    case Opcode::F64Min:      return DoBinop(FloatMin<f64>);
-    case Opcode::F64Max:      return DoBinop(FloatMax<f64>);
-    case Opcode::F64Copysign: return DoBinop(FloatCopysign<f64>);
+    case O::F64Abs:     return DoUnop(FloatAbs<f64>);
+    case O::F64Neg:     return DoUnop(Neg<f64>);
+    case O::F64Ceil:    return DoUnop(FloatCeil<f64>);
+    case O::F64Floor:   return DoUnop(FloatFloor<f64>);
+    case O::F64Trunc:   return DoUnop(FloatTrunc<f64>);
+    case O::F64Nearest: return DoUnop(FloatNearest<f64>);
+    case O::F64Sqrt:    return DoUnop(FloatSqrt<f64>);
+    case O::F64Add:      return DoBinop(Add<f64>);
+    case O::F64Sub:      return DoBinop(Sub<f64>);
+    case O::F64Mul:      return DoBinop(Mul<f64>);
+    case O::F64Div:      return DoBinop(FloatDiv<f64>);
+    case O::F64Min:      return DoBinop(FloatMin<f64>);
+    case O::F64Max:      return DoBinop(FloatMax<f64>);
+    case O::F64Copysign: return DoBinop(FloatCopysign<f64>);
 
-    case Opcode::I32WrapI64:      return DoConvert<u32, u64>(store, out_trap);
-    case Opcode::I32TruncF32S:    return DoConvert<s32, f32>(store, out_trap);
-    case Opcode::I32TruncF32U:    return DoConvert<u32, f32>(store, out_trap);
-    case Opcode::I32TruncF64S:    return DoConvert<s32, f64>(store, out_trap);
-    case Opcode::I32TruncF64U:    return DoConvert<u32, f64>(store, out_trap);
-    case Opcode::I64ExtendI32S:   return DoConvert<s64, s32>(store, out_trap);
-    case Opcode::I64ExtendI32U:   return DoConvert<u64, u32>(store, out_trap);
-    case Opcode::I64TruncF32S:    return DoConvert<s64, f32>(store, out_trap);
-    case Opcode::I64TruncF32U:    return DoConvert<u64, f32>(store, out_trap);
-    case Opcode::I64TruncF64S:    return DoConvert<s64, f64>(store, out_trap);
-    case Opcode::I64TruncF64U:    return DoConvert<u64, f64>(store, out_trap);
-    case Opcode::F32ConvertI32S:  return DoConvert<f32, s32>(store, out_trap);
-    case Opcode::F32ConvertI32U:  return DoConvert<f32, u32>(store, out_trap);
-    case Opcode::F32ConvertI64S:  return DoConvert<f32, s64>(store, out_trap);
-    case Opcode::F32ConvertI64U:  return DoConvert<f32, u64>(store, out_trap);
-    case Opcode::F32DemoteF64:    return DoConvert<f32, f64>(store, out_trap);
-    case Opcode::F64ConvertI32S:  return DoConvert<f64, s32>(store, out_trap);
-    case Opcode::F64ConvertI32U:  return DoConvert<f64, u32>(store, out_trap);
-    case Opcode::F64ConvertI64S:  return DoConvert<f64, s64>(store, out_trap);
-    case Opcode::F64ConvertI64U:  return DoConvert<f64, u64>(store, out_trap);
-    case Opcode::F64PromoteF32:   return DoConvert<f64, f64>(store, out_trap);
+    case O::I32WrapI64:      return DoConvert<u32, u64>(out_trap);
+    case O::I32TruncF32S:    return DoConvert<s32, f32>(out_trap);
+    case O::I32TruncF32U:    return DoConvert<u32, f32>(out_trap);
+    case O::I32TruncF64S:    return DoConvert<s32, f64>(out_trap);
+    case O::I32TruncF64U:    return DoConvert<u32, f64>(out_trap);
+    case O::I64ExtendI32S:   return DoConvert<s64, s32>(out_trap);
+    case O::I64ExtendI32U:   return DoConvert<u64, u32>(out_trap);
+    case O::I64TruncF32S:    return DoConvert<s64, f32>(out_trap);
+    case O::I64TruncF32U:    return DoConvert<u64, f32>(out_trap);
+    case O::I64TruncF64S:    return DoConvert<s64, f64>(out_trap);
+    case O::I64TruncF64U:    return DoConvert<u64, f64>(out_trap);
+    case O::F32ConvertI32S:  return DoConvert<f32, s32>(out_trap);
+    case O::F32ConvertI32U:  return DoConvert<f32, u32>(out_trap);
+    case O::F32ConvertI64S:  return DoConvert<f32, s64>(out_trap);
+    case O::F32ConvertI64U:  return DoConvert<f32, u64>(out_trap);
+    case O::F32DemoteF64:    return DoConvert<f32, f64>(out_trap);
+    case O::F64ConvertI32S:  return DoConvert<f64, s32>(out_trap);
+    case O::F64ConvertI32U:  return DoConvert<f64, u32>(out_trap);
+    case O::F64ConvertI64S:  return DoConvert<f64, s64>(out_trap);
+    case O::F64ConvertI64U:  return DoConvert<f64, u64>(out_trap);
+    case O::F64PromoteF32:   return DoConvert<f64, f64>(out_trap);
 
-    case Opcode::I32ReinterpretF32: return DoReinterpret<u32, f32>();
-    case Opcode::F32ReinterpretI32: return DoReinterpret<f32, u32>();
-    case Opcode::I64ReinterpretF64: return DoReinterpret<u64, f64>();
-    case Opcode::F64ReinterpretI64: return DoReinterpret<f64, u64>();
+    case O::I32ReinterpretF32: return DoReinterpret<u32, f32>();
+    case O::F32ReinterpretI32: return DoReinterpret<f32, u32>();
+    case O::I64ReinterpretF64: return DoReinterpret<u64, f64>();
+    case O::F64ReinterpretI64: return DoReinterpret<f64, u64>();
 
-    case Opcode::I32Extend8S:   return DoUnop(IntExtend<u32, 7>);
-    case Opcode::I32Extend16S:  return DoUnop(IntExtend<u32, 15>);
-    case Opcode::I64Extend8S:   return DoUnop(IntExtend<u64, 7>);
-    case Opcode::I64Extend16S:  return DoUnop(IntExtend<u64, 15>);
-    case Opcode::I64Extend32S:  return DoUnop(IntExtend<u64, 31>);
+    case O::I32Extend8S:   return DoUnop(IntExtend<u32, 7>);
+    case O::I32Extend16S:  return DoUnop(IntExtend<u32, 15>);
+    case O::I64Extend8S:   return DoUnop(IntExtend<u64, 7>);
+    case O::I64Extend16S:  return DoUnop(IntExtend<u64, 15>);
+    case O::I64Extend32S:  return DoUnop(IntExtend<u64, 31>);
 
-    case Opcode::InterpAlloca:
+    case O::InterpAlloca:
       values_.resize(values_.size() + instr.imm_u32);
       refs_.resize(refs_.size() + instr.imm_u32);
       break;
 
-    case Opcode::InterpBrUnless:
+    case O::InterpBrUnless:
       if (!Pop<u32>()) {
         pc = instr.imm_u32;
       }
       break;
 
-    case Opcode::InterpCallHost: {
-      Ref new_func_ref = inst->funcs()[instr.imm_u32];
-      Func::Ptr new_func{store, new_func_ref};
+    case O::InterpCallHost: {
+      Ref new_func_ref = inst_->funcs()[instr.imm_u32];
+      Func::Ptr new_func{store_, new_func_ref};
       return DoCall(new_func, out_trap);
     }
 
-    case Opcode::InterpDropKeep: {
+    case O::InterpDropKeep: {
       auto drop = instr.imm_u32x2.fst;
       auto keep = instr.imm_u32x2.snd;
       std::move(values_.end() - keep, values_.end(), values_.end() - drop - keep);
@@ -1401,247 +1399,244 @@ RunResult Thread::StepInternal(Store& store,
       break;
     }
 
-    case Opcode::I32TruncSatF32S: return DoUnop(IntTruncSat<s32, f32>);
-    case Opcode::I32TruncSatF32U: return DoUnop(IntTruncSat<u32, f32>);
-    case Opcode::I32TruncSatF64S: return DoUnop(IntTruncSat<s32, f64>);
-    case Opcode::I32TruncSatF64U: return DoUnop(IntTruncSat<u32, f64>);
-    case Opcode::I64TruncSatF32S: return DoUnop(IntTruncSat<s64, f32>);
-    case Opcode::I64TruncSatF32U: return DoUnop(IntTruncSat<u64, f32>);
-    case Opcode::I64TruncSatF64S: return DoUnop(IntTruncSat<s64, f64>);
-    case Opcode::I64TruncSatF64U: return DoUnop(IntTruncSat<u64, f64>);
+    case O::I32TruncSatF32S: return DoUnop(IntTruncSat<s32, f32>);
+    case O::I32TruncSatF32U: return DoUnop(IntTruncSat<u32, f32>);
+    case O::I32TruncSatF64S: return DoUnop(IntTruncSat<s32, f64>);
+    case O::I32TruncSatF64U: return DoUnop(IntTruncSat<u32, f64>);
+    case O::I64TruncSatF32S: return DoUnop(IntTruncSat<s64, f32>);
+    case O::I64TruncSatF32U: return DoUnop(IntTruncSat<u64, f32>);
+    case O::I64TruncSatF64S: return DoUnop(IntTruncSat<s64, f64>);
+    case O::I64TruncSatF64U: return DoUnop(IntTruncSat<u64, f64>);
 
-    case Opcode::MemoryInit: return DoMemoryInit(store, inst, instr, out_trap);
-    case Opcode::DataDrop:   return DoDataDrop(inst, instr);
-    case Opcode::MemoryCopy: return DoMemoryCopy(store, inst, instr, out_trap);
-    case Opcode::MemoryFill: return DoMemoryFill(store, inst, instr, out_trap);
+    case O::MemoryInit: return DoMemoryInit(instr, out_trap);
+    case O::DataDrop:   return DoDataDrop(instr);
+    case O::MemoryCopy: return DoMemoryCopy(instr, out_trap);
+    case O::MemoryFill: return DoMemoryFill(instr, out_trap);
 
-    case Opcode::TableInit: return DoTableInit(store, inst, instr, out_trap);
-    case Opcode::ElemDrop:  return DoElemDrop(inst, instr);
-    case Opcode::TableCopy: return DoTableCopy(store, inst, instr, out_trap);
-    case Opcode::TableGet:  return DoTableGet(store, inst, instr, out_trap);
-    case Opcode::TableSet:  return DoTableSet(store, inst, instr, out_trap);
-    case Opcode::TableGrow: return DoTableGrow(store, inst, instr, out_trap);
-    case Opcode::TableSize: return DoTableSize(store, inst, instr);
-    case Opcode::TableFill: return DoTableFill(store, inst, instr, out_trap);
+    case O::TableInit: return DoTableInit(instr, out_trap);
+    case O::ElemDrop:  return DoElemDrop(instr);
+    case O::TableCopy: return DoTableCopy(instr, out_trap);
+    case O::TableGet:  return DoTableGet(instr, out_trap);
+    case O::TableSet:  return DoTableSet(instr, out_trap);
+    case O::TableGrow: return DoTableGrow(instr, out_trap);
+    case O::TableSize: return DoTableSize(instr);
+    case O::TableFill: return DoTableFill(instr, out_trap);
 
-    case Opcode::RefNull:
+    case O::RefNull:
       Push<Ref>(Ref::Null);
       break;
 
-    case Opcode::RefIsNull:
+    case O::RefIsNull:
       Push(Pop<Ref>() == Ref::Null);
       break;
 
-    case Opcode::RefFunc:
-      Push(inst->funcs()[instr.imm_u32]);
+    case O::RefFunc:
+      Push(inst_->funcs()[instr.imm_u32]);
       break;
 
-    case Opcode::V128Load:
-      return DoLoad<v128>(store, inst, instr, out_trap);
+    case O::V128Load: return DoLoad<v128>(instr, out_trap);
+    case O::V128Store: return DoStore<v128>(instr, out_trap);
 
-    case Opcode::V128Store:
-      return DoStore<v128>(store, inst, instr, out_trap);
-
-    case Opcode::V128Const:
+    case O::V128Const:
       Push<v128>(instr.imm_v128);
       break;
 
-    case Opcode::I8X16Splat:        return DoSimdSplat<u8x16, u32>();
-    case Opcode::I8X16ExtractLaneS: return DoSimdExtract<s8x16, s32>(instr);
-    case Opcode::I8X16ExtractLaneU: return DoSimdExtract<u8x16, u32>(instr);
-    case Opcode::I8X16ReplaceLane:  return DoSimdReplace<u8x16, u32>(instr);
-    case Opcode::I16X8Splat:        return DoSimdSplat<u16x8, u32>();
-    case Opcode::I16X8ExtractLaneS: return DoSimdExtract<s16x8, s32>(instr);
-    case Opcode::I16X8ExtractLaneU: return DoSimdExtract<u16x8, u32>(instr);
-    case Opcode::I16X8ReplaceLane:  return DoSimdReplace<u16x8, u32>(instr);
-    case Opcode::I32X4Splat:        return DoSimdSplat<u32x4, u32>();
-    case Opcode::I32X4ExtractLane:  return DoSimdExtract<s32x4, u32>(instr);
-    case Opcode::I32X4ReplaceLane:  return DoSimdReplace<u32x4, u32>(instr);
-    case Opcode::I64X2Splat:        return DoSimdSplat<u64x2, u64>();
-    case Opcode::I64X2ExtractLane:  return DoSimdExtract<u64x2, u64>(instr);
-    case Opcode::I64X2ReplaceLane:  return DoSimdReplace<u64x2, u64>(instr);
-    case Opcode::F32X4Splat:        return DoSimdSplat<f32x4, f32>();
-    case Opcode::F32X4ExtractLane:  return DoSimdExtract<f32x4, f32>(instr);
-    case Opcode::F32X4ReplaceLane:  return DoSimdReplace<f32x4, f32>(instr);
-    case Opcode::F64X2Splat:        return DoSimdSplat<f64x2, f64>();
-    case Opcode::F64X2ExtractLane:  return DoSimdExtract<f64x2, f64>(instr);
-    case Opcode::F64X2ReplaceLane:  return DoSimdReplace<f64x2, f64>(instr);
+    case O::I8X16Splat:        return DoSimdSplat<u8x16, u32>();
+    case O::I8X16ExtractLaneS: return DoSimdExtract<s8x16, s32>(instr);
+    case O::I8X16ExtractLaneU: return DoSimdExtract<u8x16, u32>(instr);
+    case O::I8X16ReplaceLane:  return DoSimdReplace<u8x16, u32>(instr);
+    case O::I16X8Splat:        return DoSimdSplat<u16x8, u32>();
+    case O::I16X8ExtractLaneS: return DoSimdExtract<s16x8, s32>(instr);
+    case O::I16X8ExtractLaneU: return DoSimdExtract<u16x8, u32>(instr);
+    case O::I16X8ReplaceLane:  return DoSimdReplace<u16x8, u32>(instr);
+    case O::I32X4Splat:        return DoSimdSplat<u32x4, u32>();
+    case O::I32X4ExtractLane:  return DoSimdExtract<s32x4, u32>(instr);
+    case O::I32X4ReplaceLane:  return DoSimdReplace<u32x4, u32>(instr);
+    case O::I64X2Splat:        return DoSimdSplat<u64x2, u64>();
+    case O::I64X2ExtractLane:  return DoSimdExtract<u64x2, u64>(instr);
+    case O::I64X2ReplaceLane:  return DoSimdReplace<u64x2, u64>(instr);
+    case O::F32X4Splat:        return DoSimdSplat<f32x4, f32>();
+    case O::F32X4ExtractLane:  return DoSimdExtract<f32x4, f32>(instr);
+    case O::F32X4ReplaceLane:  return DoSimdReplace<f32x4, f32>(instr);
+    case O::F64X2Splat:        return DoSimdSplat<f64x2, f64>();
+    case O::F64X2ExtractLane:  return DoSimdExtract<f64x2, f64>(instr);
+    case O::F64X2ReplaceLane:  return DoSimdReplace<f64x2, f64>(instr);
 
-    case Opcode::I8X16Eq:  return DoSimdBinop<u8x16>(EqMask<u8>);
-    case Opcode::I8X16Ne:  return DoSimdBinop<u8x16>(NeMask<u8>);
-    case Opcode::I8X16LtS: return DoSimdBinop<u8x16>(LtMask<s8>);
-    case Opcode::I8X16LtU: return DoSimdBinop<u8x16>(LtMask<u8>);
-    case Opcode::I8X16GtS: return DoSimdBinop<u8x16>(GtMask<s8>);
-    case Opcode::I8X16GtU: return DoSimdBinop<u8x16>(GtMask<u8>);
-    case Opcode::I8X16LeS: return DoSimdBinop<u8x16>(LeMask<s8>);
-    case Opcode::I8X16LeU: return DoSimdBinop<u8x16>(LeMask<u8>);
-    case Opcode::I8X16GeS: return DoSimdBinop<u8x16>(GeMask<s8>);
-    case Opcode::I8X16GeU: return DoSimdBinop<u8x16>(GeMask<u8>);
-    case Opcode::I16X8Eq:  return DoSimdBinop<u16x8>(EqMask<u16>);
-    case Opcode::I16X8Ne:  return DoSimdBinop<u16x8>(NeMask<u16>);
-    case Opcode::I16X8LtS: return DoSimdBinop<s16x8>(LtMask<s16>);
-    case Opcode::I16X8LtU: return DoSimdBinop<u16x8>(LtMask<u16>);
-    case Opcode::I16X8GtS: return DoSimdBinop<s16x8>(GtMask<s16>);
-    case Opcode::I16X8GtU: return DoSimdBinop<u16x8>(GtMask<u16>);
-    case Opcode::I16X8LeS: return DoSimdBinop<s16x8>(LeMask<s16>);
-    case Opcode::I16X8LeU: return DoSimdBinop<u16x8>(LeMask<u16>);
-    case Opcode::I16X8GeS: return DoSimdBinop<s16x8>(GeMask<s16>);
-    case Opcode::I16X8GeU: return DoSimdBinop<u16x8>(GeMask<u16>);
-    case Opcode::I32X4Eq:  return DoSimdBinop<u32x4>(EqMask<u32>);
-    case Opcode::I32X4Ne:  return DoSimdBinop<u32x4>(NeMask<u32>);
-    case Opcode::I32X4LtS: return DoSimdBinop<s32x4>(LtMask<s32>);
-    case Opcode::I32X4LtU: return DoSimdBinop<u32x4>(LtMask<u32>);
-    case Opcode::I32X4GtS: return DoSimdBinop<s32x4>(GtMask<s32>);
-    case Opcode::I32X4GtU: return DoSimdBinop<u32x4>(GtMask<u32>);
-    case Opcode::I32X4LeS: return DoSimdBinop<s32x4>(LeMask<s32>);
-    case Opcode::I32X4LeU: return DoSimdBinop<u32x4>(LeMask<u32>);
-    case Opcode::I32X4GeS: return DoSimdBinop<s32x4>(GeMask<s32>);
-    case Opcode::I32X4GeU: return DoSimdBinop<u32x4>(GeMask<u32>);
-    case Opcode::F32X4Eq:  return DoSimdBinop<f32x4>(EqMask<f32>);
-    case Opcode::F32X4Ne:  return DoSimdBinop<f32x4>(NeMask<f32>);
-    case Opcode::F32X4Lt:  return DoSimdBinop<f32x4>(LtMask<f32>);
-    case Opcode::F32X4Gt:  return DoSimdBinop<f32x4>(GtMask<f32>);
-    case Opcode::F32X4Le:  return DoSimdBinop<f32x4>(LeMask<f32>);
-    case Opcode::F32X4Ge:  return DoSimdBinop<f32x4>(GeMask<f32>);
-    case Opcode::F64X2Eq:  return DoSimdBinop<f64x2>(EqMask<f64>);
-    case Opcode::F64X2Ne:  return DoSimdBinop<f64x2>(NeMask<f64>);
-    case Opcode::F64X2Lt:  return DoSimdBinop<f64x2>(LtMask<f64>);
-    case Opcode::F64X2Gt:  return DoSimdBinop<f64x2>(GtMask<f64>);
-    case Opcode::F64X2Le:  return DoSimdBinop<f64x2>(LeMask<f64>);
-    case Opcode::F64X2Ge:  return DoSimdBinop<f64x2>(GeMask<f64>);
+    case O::I8X16Eq:  return DoSimdBinop<u8x16>(EqMask<u8>);
+    case O::I8X16Ne:  return DoSimdBinop<u8x16>(NeMask<u8>);
+    case O::I8X16LtS: return DoSimdBinop<u8x16>(LtMask<s8>);
+    case O::I8X16LtU: return DoSimdBinop<u8x16>(LtMask<u8>);
+    case O::I8X16GtS: return DoSimdBinop<u8x16>(GtMask<s8>);
+    case O::I8X16GtU: return DoSimdBinop<u8x16>(GtMask<u8>);
+    case O::I8X16LeS: return DoSimdBinop<u8x16>(LeMask<s8>);
+    case O::I8X16LeU: return DoSimdBinop<u8x16>(LeMask<u8>);
+    case O::I8X16GeS: return DoSimdBinop<u8x16>(GeMask<s8>);
+    case O::I8X16GeU: return DoSimdBinop<u8x16>(GeMask<u8>);
+    case O::I16X8Eq:  return DoSimdBinop<u16x8>(EqMask<u16>);
+    case O::I16X8Ne:  return DoSimdBinop<u16x8>(NeMask<u16>);
+    case O::I16X8LtS: return DoSimdBinop<s16x8>(LtMask<s16>);
+    case O::I16X8LtU: return DoSimdBinop<u16x8>(LtMask<u16>);
+    case O::I16X8GtS: return DoSimdBinop<s16x8>(GtMask<s16>);
+    case O::I16X8GtU: return DoSimdBinop<u16x8>(GtMask<u16>);
+    case O::I16X8LeS: return DoSimdBinop<s16x8>(LeMask<s16>);
+    case O::I16X8LeU: return DoSimdBinop<u16x8>(LeMask<u16>);
+    case O::I16X8GeS: return DoSimdBinop<s16x8>(GeMask<s16>);
+    case O::I16X8GeU: return DoSimdBinop<u16x8>(GeMask<u16>);
+    case O::I32X4Eq:  return DoSimdBinop<u32x4>(EqMask<u32>);
+    case O::I32X4Ne:  return DoSimdBinop<u32x4>(NeMask<u32>);
+    case O::I32X4LtS: return DoSimdBinop<s32x4>(LtMask<s32>);
+    case O::I32X4LtU: return DoSimdBinop<u32x4>(LtMask<u32>);
+    case O::I32X4GtS: return DoSimdBinop<s32x4>(GtMask<s32>);
+    case O::I32X4GtU: return DoSimdBinop<u32x4>(GtMask<u32>);
+    case O::I32X4LeS: return DoSimdBinop<s32x4>(LeMask<s32>);
+    case O::I32X4LeU: return DoSimdBinop<u32x4>(LeMask<u32>);
+    case O::I32X4GeS: return DoSimdBinop<s32x4>(GeMask<s32>);
+    case O::I32X4GeU: return DoSimdBinop<u32x4>(GeMask<u32>);
+    case O::F32X4Eq:  return DoSimdBinop<f32x4>(EqMask<f32>);
+    case O::F32X4Ne:  return DoSimdBinop<f32x4>(NeMask<f32>);
+    case O::F32X4Lt:  return DoSimdBinop<f32x4>(LtMask<f32>);
+    case O::F32X4Gt:  return DoSimdBinop<f32x4>(GtMask<f32>);
+    case O::F32X4Le:  return DoSimdBinop<f32x4>(LeMask<f32>);
+    case O::F32X4Ge:  return DoSimdBinop<f32x4>(GeMask<f32>);
+    case O::F64X2Eq:  return DoSimdBinop<f64x2>(EqMask<f64>);
+    case O::F64X2Ne:  return DoSimdBinop<f64x2>(NeMask<f64>);
+    case O::F64X2Lt:  return DoSimdBinop<f64x2>(LtMask<f64>);
+    case O::F64X2Gt:  return DoSimdBinop<f64x2>(GtMask<f64>);
+    case O::F64X2Le:  return DoSimdBinop<f64x2>(LeMask<f64>);
+    case O::F64X2Ge:  return DoSimdBinop<f64x2>(GeMask<f64>);
 
-    case Opcode::V128Not:       return DoSimdUnop<u64x2>(IntNot<u64>);
-    case Opcode::V128And:       return DoSimdBinop<u64x2>(IntAnd<u64>);
-    case Opcode::V128Or:        return DoSimdBinop<u64x2>(IntOr<u64>);
-    case Opcode::V128Xor:       return DoSimdBinop<u64x2>(IntXor<u64>);
-    case Opcode::V128BitSelect: return DoSimdBitSelect();
+    case O::V128Not:       return DoSimdUnop<u64x2>(IntNot<u64>);
+    case O::V128And:       return DoSimdBinop<u64x2>(IntAnd<u64>);
+    case O::V128Or:        return DoSimdBinop<u64x2>(IntOr<u64>);
+    case O::V128Xor:       return DoSimdBinop<u64x2>(IntXor<u64>);
+    case O::V128BitSelect: return DoSimdBitSelect();
 
-    case Opcode::I8X16Neg:          return DoSimdUnop<u8x16>(Neg<u8>);
-    case Opcode::I8X16AnyTrue:      return DoSimdIsTrue<u8x16, 1>();
-    case Opcode::I8X16AllTrue:      return DoSimdIsTrue<u8x16, 16>();
-    case Opcode::I8X16Shl:          return DoSimdShift<u8x16>(IntShl<u8>);
-    case Opcode::I8X16ShrS:         return DoSimdShift<u8x16>(IntShr<s8>);
-    case Opcode::I8X16ShrU:         return DoSimdShift<u8x16>(IntShr<u8>);
-    case Opcode::I8X16Add:          return DoSimdBinop<u8x16>(Add<u8>);
-    case Opcode::I8X16AddSaturateS: return DoSimdBinop<u8x16>(IntAddSat<s8>);
-    case Opcode::I8X16AddSaturateU: return DoSimdBinop<u8x16>(IntAddSat<u8>);
-    case Opcode::I8X16Sub:          return DoSimdBinop<u8x16>(Sub<u8>);
-    case Opcode::I8X16SubSaturateS: return DoSimdBinop<u8x16>(IntSubSat<s8>);
-    case Opcode::I8X16SubSaturateU: return DoSimdBinop<u8x16>(IntSubSat<u8>);
-    case Opcode::I8X16Mul:          return DoSimdBinop<u8x16>(Mul<u8>);
+    case O::I8X16Neg:          return DoSimdUnop<u8x16>(Neg<u8>);
+    case O::I8X16AnyTrue:      return DoSimdIsTrue<u8x16, 1>();
+    case O::I8X16AllTrue:      return DoSimdIsTrue<u8x16, 16>();
+    case O::I8X16Shl:          return DoSimdShift<u8x16>(IntShl<u8>);
+    case O::I8X16ShrS:         return DoSimdShift<u8x16>(IntShr<s8>);
+    case O::I8X16ShrU:         return DoSimdShift<u8x16>(IntShr<u8>);
+    case O::I8X16Add:          return DoSimdBinop<u8x16>(Add<u8>);
+    case O::I8X16AddSaturateS: return DoSimdBinop<u8x16>(IntAddSat<s8>);
+    case O::I8X16AddSaturateU: return DoSimdBinop<u8x16>(IntAddSat<u8>);
+    case O::I8X16Sub:          return DoSimdBinop<u8x16>(Sub<u8>);
+    case O::I8X16SubSaturateS: return DoSimdBinop<u8x16>(IntSubSat<s8>);
+    case O::I8X16SubSaturateU: return DoSimdBinop<u8x16>(IntSubSat<u8>);
+    case O::I8X16Mul:          return DoSimdBinop<u8x16>(Mul<u8>);
 
-    case Opcode::I16X8Neg:          return DoSimdUnop<u16x8>(Neg<u16>);
-    case Opcode::I16X8AnyTrue:      return DoSimdIsTrue<u16x8, 1>();
-    case Opcode::I16X8AllTrue:      return DoSimdIsTrue<u16x8, 8>();
-    case Opcode::I16X8Shl:          return DoSimdShift<u16x8>(IntShl<u16>);
-    case Opcode::I16X8ShrS:         return DoSimdShift<u16x8>(IntShr<s16>);
-    case Opcode::I16X8ShrU:         return DoSimdShift<u16x8>(IntShr<u16>);
-    case Opcode::I16X8Add:          return DoSimdBinop<u16x8>(Add<u16>);
-    case Opcode::I16X8AddSaturateS: return DoSimdBinop<u16x8>(IntAddSat<s16>);
-    case Opcode::I16X8AddSaturateU: return DoSimdBinop<u16x8>(IntAddSat<u16>);
-    case Opcode::I16X8Sub:          return DoSimdBinop<u16x8>(Sub<u16>);
-    case Opcode::I16X8SubSaturateS: return DoSimdBinop<u16x8>(IntSubSat<s16>);
-    case Opcode::I16X8SubSaturateU: return DoSimdBinop<u16x8>(IntSubSat<u16>);
-    case Opcode::I16X8Mul:          return DoSimdBinop<u16x8>(Mul<u16>);
+    case O::I16X8Neg:          return DoSimdUnop<u16x8>(Neg<u16>);
+    case O::I16X8AnyTrue:      return DoSimdIsTrue<u16x8, 1>();
+    case O::I16X8AllTrue:      return DoSimdIsTrue<u16x8, 8>();
+    case O::I16X8Shl:          return DoSimdShift<u16x8>(IntShl<u16>);
+    case O::I16X8ShrS:         return DoSimdShift<u16x8>(IntShr<s16>);
+    case O::I16X8ShrU:         return DoSimdShift<u16x8>(IntShr<u16>);
+    case O::I16X8Add:          return DoSimdBinop<u16x8>(Add<u16>);
+    case O::I16X8AddSaturateS: return DoSimdBinop<u16x8>(IntAddSat<s16>);
+    case O::I16X8AddSaturateU: return DoSimdBinop<u16x8>(IntAddSat<u16>);
+    case O::I16X8Sub:          return DoSimdBinop<u16x8>(Sub<u16>);
+    case O::I16X8SubSaturateS: return DoSimdBinop<u16x8>(IntSubSat<s16>);
+    case O::I16X8SubSaturateU: return DoSimdBinop<u16x8>(IntSubSat<u16>);
+    case O::I16X8Mul:          return DoSimdBinop<u16x8>(Mul<u16>);
 
-    case Opcode::I32X4Neg:          return DoSimdUnop<u32x4>(Neg<u32>);
-    case Opcode::I32X4AnyTrue:      return DoSimdIsTrue<u32x4, 1>();
-    case Opcode::I32X4AllTrue:      return DoSimdIsTrue<u32x4, 4>();
-    case Opcode::I32X4Shl:          return DoSimdShift<u32x4>(IntShl<u32>);
-    case Opcode::I32X4ShrS:         return DoSimdShift<u32x4>(IntShr<s32>);
-    case Opcode::I32X4ShrU:         return DoSimdShift<u32x4>(IntShr<u32>);
-    case Opcode::I32X4Add:          return DoSimdBinop<u32x4>(Add<u32>);
-    case Opcode::I32X4Sub:          return DoSimdBinop<u32x4>(Sub<u32>);
-    case Opcode::I32X4Mul:          return DoSimdBinop<u32x4>(Mul<u32>);
+    case O::I32X4Neg:          return DoSimdUnop<u32x4>(Neg<u32>);
+    case O::I32X4AnyTrue:      return DoSimdIsTrue<u32x4, 1>();
+    case O::I32X4AllTrue:      return DoSimdIsTrue<u32x4, 4>();
+    case O::I32X4Shl:          return DoSimdShift<u32x4>(IntShl<u32>);
+    case O::I32X4ShrS:         return DoSimdShift<u32x4>(IntShr<s32>);
+    case O::I32X4ShrU:         return DoSimdShift<u32x4>(IntShr<u32>);
+    case O::I32X4Add:          return DoSimdBinop<u32x4>(Add<u32>);
+    case O::I32X4Sub:          return DoSimdBinop<u32x4>(Sub<u32>);
+    case O::I32X4Mul:          return DoSimdBinop<u32x4>(Mul<u32>);
 
-    case Opcode::I64X2Neg:          return DoSimdUnop<u64x2>(Neg<u64>);
-    case Opcode::I64X2AnyTrue:      return DoSimdIsTrue<u64x2, 1>();
-    case Opcode::I64X2AllTrue:      return DoSimdIsTrue<u64x2, 2>();
-    case Opcode::I64X2Shl:          return DoSimdShift<u64x2>(IntShl<u64>);
-    case Opcode::I64X2ShrS:         return DoSimdShift<u64x2>(IntShr<s64>);
-    case Opcode::I64X2ShrU:         return DoSimdShift<u64x2>(IntShr<u64>);
-    case Opcode::I64X2Add:          return DoSimdBinop<u64x2>(Add<u64>);
-    case Opcode::I64X2Sub:          return DoSimdBinop<u64x2>(Sub<u64>);
+    case O::I64X2Neg:          return DoSimdUnop<u64x2>(Neg<u64>);
+    case O::I64X2AnyTrue:      return DoSimdIsTrue<u64x2, 1>();
+    case O::I64X2AllTrue:      return DoSimdIsTrue<u64x2, 2>();
+    case O::I64X2Shl:          return DoSimdShift<u64x2>(IntShl<u64>);
+    case O::I64X2ShrS:         return DoSimdShift<u64x2>(IntShr<s64>);
+    case O::I64X2ShrU:         return DoSimdShift<u64x2>(IntShr<u64>);
+    case O::I64X2Add:          return DoSimdBinop<u64x2>(Add<u64>);
+    case O::I64X2Sub:          return DoSimdBinop<u64x2>(Sub<u64>);
 
-    case Opcode::F32X4Abs:          return DoSimdUnop<f32x4>(FloatAbs<f32>);
-    case Opcode::F32X4Neg:          return DoSimdUnop<f32x4>(Neg<f32>);
-    case Opcode::F32X4Sqrt:         return DoSimdUnop<f32x4>(FloatSqrt<f32>);
-    case Opcode::F32X4Add:          return DoSimdBinop<f32x4>(Add<f32>);
-    case Opcode::F32X4Sub:          return DoSimdBinop<f32x4>(Sub<f32>);
-    case Opcode::F32X4Mul:          return DoSimdBinop<f32x4>(Mul<f32>);
-    case Opcode::F32X4Div:          return DoSimdBinop<f32x4>(FloatDiv<f32>);
-    case Opcode::F32X4Min:          return DoSimdBinop<f32x4>(FloatMin<f32>);
-    case Opcode::F32X4Max:          return DoSimdBinop<f32x4>(FloatMax<f32>);
+    case O::F32X4Abs:          return DoSimdUnop<f32x4>(FloatAbs<f32>);
+    case O::F32X4Neg:          return DoSimdUnop<f32x4>(Neg<f32>);
+    case O::F32X4Sqrt:         return DoSimdUnop<f32x4>(FloatSqrt<f32>);
+    case O::F32X4Add:          return DoSimdBinop<f32x4>(Add<f32>);
+    case O::F32X4Sub:          return DoSimdBinop<f32x4>(Sub<f32>);
+    case O::F32X4Mul:          return DoSimdBinop<f32x4>(Mul<f32>);
+    case O::F32X4Div:          return DoSimdBinop<f32x4>(FloatDiv<f32>);
+    case O::F32X4Min:          return DoSimdBinop<f32x4>(FloatMin<f32>);
+    case O::F32X4Max:          return DoSimdBinop<f32x4>(FloatMax<f32>);
 
-    case Opcode::F64X2Abs:          return DoSimdUnop<f64x2>(FloatAbs<f64>);
-    case Opcode::F64X2Neg:          return DoSimdUnop<f64x2>(Neg<f64>);
-    case Opcode::F64X2Sqrt:         return DoSimdUnop<f64x2>(FloatSqrt<f64>);
-    case Opcode::F64X2Add:          return DoSimdBinop<f64x2>(Add<f64>);
-    case Opcode::F64X2Sub:          return DoSimdBinop<f64x2>(Sub<f64>);
-    case Opcode::F64X2Mul:          return DoSimdBinop<f64x2>(Mul<f64>);
-    case Opcode::F64X2Div:          return DoSimdBinop<f64x2>(FloatDiv<f64>);
-    case Opcode::F64X2Min:          return DoSimdBinop<f64x2>(FloatMin<f64>);
-    case Opcode::F64X2Max:          return DoSimdBinop<f64x2>(FloatMax<f64>);
+    case O::F64X2Abs:          return DoSimdUnop<f64x2>(FloatAbs<f64>);
+    case O::F64X2Neg:          return DoSimdUnop<f64x2>(Neg<f64>);
+    case O::F64X2Sqrt:         return DoSimdUnop<f64x2>(FloatSqrt<f64>);
+    case O::F64X2Add:          return DoSimdBinop<f64x2>(Add<f64>);
+    case O::F64X2Sub:          return DoSimdBinop<f64x2>(Sub<f64>);
+    case O::F64X2Mul:          return DoSimdBinop<f64x2>(Mul<f64>);
+    case O::F64X2Div:          return DoSimdBinop<f64x2>(FloatDiv<f64>);
+    case O::F64X2Min:          return DoSimdBinop<f64x2>(FloatMin<f64>);
+    case O::F64X2Max:          return DoSimdBinop<f64x2>(FloatMax<f64>);
 
-    case Opcode::I32X4TruncSatF32X4S: return DoSimdUnop<s32x4>(IntTruncSat<s32, f32>);
-    case Opcode::I32X4TruncSatF32X4U: return DoSimdUnop<u32x4>(IntTruncSat<u32, f32>);
-    case Opcode::I64X2TruncSatF64X2S: return DoSimdUnop<s64x2>(IntTruncSat<s64, f64>);
-    case Opcode::I64X2TruncSatF64X2U: return DoSimdUnop<u64x2>(IntTruncSat<u64, f64>);
-    case Opcode::F32X4ConvertI32X4S:  return DoSimdUnop<f32x4>(Convert<f32, s32>);
-    case Opcode::F32X4ConvertI32X4U:  return DoSimdUnop<f32x4>(Convert<f32, u32>);
-    case Opcode::F64X2ConvertI64X2S:  return DoSimdUnop<f64x2>(Convert<f64, s64>);
-    case Opcode::F64X2ConvertI64X2U:  return DoSimdUnop<f64x2>(Convert<f64, u64>);
+    case O::I32X4TruncSatF32X4S: return DoSimdUnop<s32x4>(IntTruncSat<s32, f32>);
+    case O::I32X4TruncSatF32X4U: return DoSimdUnop<u32x4>(IntTruncSat<u32, f32>);
+    case O::I64X2TruncSatF64X2S: return DoSimdUnop<s64x2>(IntTruncSat<s64, f64>);
+    case O::I64X2TruncSatF64X2U: return DoSimdUnop<u64x2>(IntTruncSat<u64, f64>);
+    case O::F32X4ConvertI32X4S:  return DoSimdUnop<f32x4>(Convert<f32, s32>);
+    case O::F32X4ConvertI32X4U:  return DoSimdUnop<f32x4>(Convert<f32, u32>);
+    case O::F64X2ConvertI64X2S:  return DoSimdUnop<f64x2>(Convert<f64, s64>);
+    case O::F64X2ConvertI64X2U:  return DoSimdUnop<f64x2>(Convert<f64, u64>);
 
-    case Opcode::V8X16Swizzle:     return DoSimdSwizzle();
-    case Opcode::V8X16Shuffle:     return DoSimdShuffle(instr);
+    case O::V8X16Swizzle:     return DoSimdSwizzle();
+    case O::V8X16Shuffle:     return DoSimdShuffle(instr);
 
-    case Opcode::I8X16LoadSplat:   return DoSimdLoadSplat<u8x16, u32>(store, inst, instr, out_trap);
-    case Opcode::I16X8LoadSplat:   return DoSimdLoadSplat<u16x8, u32>(store, inst, instr, out_trap);
-    case Opcode::I32X4LoadSplat:   return DoSimdLoadSplat<u32x4, u32>(store, inst, instr, out_trap);
-    case Opcode::I64X2LoadSplat:   return DoSimdLoadSplat<u64x2, u64>(store, inst, instr, out_trap);
+    case O::I8X16LoadSplat:   return DoSimdLoadSplat<u8x16, u32>(instr, out_trap);
+    case O::I16X8LoadSplat:   return DoSimdLoadSplat<u16x8, u32>(instr, out_trap);
+    case O::I32X4LoadSplat:   return DoSimdLoadSplat<u32x4, u32>(instr, out_trap);
+    case O::I64X2LoadSplat:   return DoSimdLoadSplat<u64x2, u64>(instr, out_trap);
 
-    case Opcode::I8X16NarrowI16X8S:    return DoSimdNarrow<s8x16, s16x8>();
-    case Opcode::I8X16NarrowI16X8U:    return DoSimdNarrow<u8x16, u16x8>();
-    case Opcode::I16X8NarrowI32X4S:    return DoSimdNarrow<s16x8, s32x4>();
-    case Opcode::I16X8NarrowI32X4U:    return DoSimdNarrow<u16x8, u32x4>();
-    case Opcode::I16X8WidenLowI8X16S:  return DoSimdWiden<s16x8, s8x16, true>();
-    case Opcode::I16X8WidenHighI8X16S: return DoSimdWiden<s16x8, s8x16, false>();
-    case Opcode::I16X8WidenLowI8X16U:  return DoSimdWiden<u16x8, u8x16, true>();
-    case Opcode::I16X8WidenHighI8X16U: return DoSimdWiden<u16x8, u8x16, false>();
-    case Opcode::I32X4WidenLowI16X8S:  return DoSimdWiden<s32x4, s16x8, true>();
-    case Opcode::I32X4WidenHighI16X8S: return DoSimdWiden<s32x4, s16x8, false>();
-    case Opcode::I32X4WidenLowI16X8U:  return DoSimdWiden<u32x4, u16x8, true>();
-    case Opcode::I32X4WidenHighI16X8U: return DoSimdWiden<u32x4, u16x8, false>();
+    case O::I8X16NarrowI16X8S:    return DoSimdNarrow<s8x16, s16x8>();
+    case O::I8X16NarrowI16X8U:    return DoSimdNarrow<u8x16, u16x8>();
+    case O::I16X8NarrowI32X4S:    return DoSimdNarrow<s16x8, s32x4>();
+    case O::I16X8NarrowI32X4U:    return DoSimdNarrow<u16x8, u32x4>();
+    case O::I16X8WidenLowI8X16S:  return DoSimdWiden<s16x8, s8x16, true>();
+    case O::I16X8WidenHighI8X16S: return DoSimdWiden<s16x8, s8x16, false>();
+    case O::I16X8WidenLowI8X16U:  return DoSimdWiden<u16x8, u8x16, true>();
+    case O::I16X8WidenHighI8X16U: return DoSimdWiden<u16x8, u8x16, false>();
+    case O::I32X4WidenLowI16X8S:  return DoSimdWiden<s32x4, s16x8, true>();
+    case O::I32X4WidenHighI16X8S: return DoSimdWiden<s32x4, s16x8, false>();
+    case O::I32X4WidenLowI16X8U:  return DoSimdWiden<u32x4, u16x8, true>();
+    case O::I32X4WidenHighI16X8U: return DoSimdWiden<u32x4, u16x8, false>();
 
-    case Opcode::I16X8Load8X8S: /* TODO */ break;
-    case Opcode::I16X8Load8X8U: /* TODO */ break;
-    case Opcode::I32X4Load16X4S: /* TODO */ break;
-    case Opcode::I32X4Load16X4U: /* TODO */ break;
-    case Opcode::I64X2Load32X2S: /* TODO */ break;
-    case Opcode::I64X2Load32X2U: /* TODO */ break;
+    case O::I16X8Load8X8S: /* TODO */ break;
+    case O::I16X8Load8X8U: /* TODO */ break;
+    case O::I32X4Load16X4S: /* TODO */ break;
+    case O::I32X4Load16X4U: /* TODO */ break;
+    case O::I64X2Load32X2S: /* TODO */ break;
+    case O::I64X2Load32X2U: /* TODO */ break;
 
-    case Opcode::V128Andnot: return DoSimdBinop<u64x2>(IntAndNot<u64>);
-    case Opcode::I8X16AvgrU: return DoSimdBinop<u8x16>(IntAvgr<u8>);
-    case Opcode::I16X8AvgrU: return DoSimdBinop<u16x8>(IntAvgr<u16>);
+    case O::V128Andnot: return DoSimdBinop<u64x2>(IntAndNot<u64>);
+    case O::I8X16AvgrU: return DoSimdBinop<u8x16>(IntAvgr<u8>);
+    case O::I16X8AvgrU: return DoSimdBinop<u16x8>(IntAvgr<u16>);
 
     // The following opcodes are either never generated or should never be
     // executed.
-    case Opcode::Nop:
-    case Opcode::Block:
-    case Opcode::Loop:
-    case Opcode::If:
-    case Opcode::Else:
-    case Opcode::End:
-    case Opcode::ReturnCall:
-    case Opcode::SelectT:
+    case O::Nop:
+    case O::Block:
+    case O::Loop:
+    case O::If:
+    case O::Else:
+    case O::End:
+    case O::ReturnCall:
+    case O::SelectT:
 
-    case Opcode::Try:
-    case Opcode::Catch:
-    case Opcode::Throw:
-    case Opcode::Rethrow:
-    case Opcode::BrOnExn:
-    case Opcode::InterpData:
-    case Opcode::Invalid:
+    case O::Try:
+    case O::Catch:
+    case O::Throw:
+    case O::Rethrow:
+    case O::BrOnExn:
+    case O::InterpData:
+    case O::Invalid:
       WABT_UNREACHABLE;
       break;
   }
@@ -1650,6 +1645,7 @@ RunResult Thread::StepInternal(Store& store,
 }
 
 RunResult Thread::DoCall(const Func::Ptr& func, Trap::Ptr* out_trap) {
+  // TODO update inst_ and mod_
   if (auto* host_func = dyn_cast<HostFunc>(func.get())) {
     // TODO
   } else {
@@ -1660,11 +1656,8 @@ RunResult Thread::DoCall(const Func::Ptr& func, Trap::Ptr* out_trap) {
 }
 
 template <typename T, typename V>
-RunResult Thread::DoLoad(Store& store,
-                         Instance::Ptr& inst,
-                         Instr instr,
-                         Trap::Ptr* out_trap) {
-  Memory::Ptr memory{store, inst->memories()[instr.imm_u32x2.fst]};
+RunResult Thread::DoLoad(Instr instr, Trap::Ptr* out_trap) {
+  Memory::Ptr memory{store_, inst_->memories()[instr.imm_u32x2.fst]};
   u32 offset = Pop<u32>();
   V val;
   TRAP_IF(Failed(memory->Load(offset, instr.imm_u32x2.snd, &val)),
@@ -1675,11 +1668,8 @@ RunResult Thread::DoLoad(Store& store,
 }
 
 template <typename T, typename V>
-RunResult Thread::DoStore(Store& store,
-                          Instance::Ptr& inst,
-                          Instr instr,
-                          Trap::Ptr* out_trap) {
-  Memory::Ptr memory{store, inst->memories()[instr.imm_u32x2.fst]};
+RunResult Thread::DoStore(Instr instr, Trap::Ptr* out_trap) {
+  Memory::Ptr memory{store_, inst_->memories()[instr.imm_u32x2.fst]};
   u32 offset = Pop<u32>();
   T val = static_cast<T>(Pop<V>());
   TRAP_IF(Failed(memory->Store(offset, instr.imm_u32x2.snd, val)),
@@ -1695,9 +1685,7 @@ RunResult Thread::DoUnop(UnopFunc<R, T> f) {
 }
 
 template <typename R, typename T>
-RunResult Thread::DoUnop(Store& store,
-                         UnopTrapFunc<R, T> f,
-                         Trap::Ptr* out_trap) {
+RunResult Thread::DoUnop(UnopTrapFunc<R, T> f, Trap::Ptr* out_trap) {
   T out;
   std::string msg;
   TRAP_IF(f(Pop<T>(), &out, &msg) == RunResult::Trap, msg);
@@ -1714,9 +1702,7 @@ RunResult Thread::DoBinop(BinopFunc<R, T> f) {
 }
 
 template <typename R, typename T>
-RunResult Thread::DoBinop(Store& store,
-                          BinopTrapFunc<R, T> f,
-                          Trap::Ptr* out_trap) {
+RunResult Thread::DoBinop(BinopTrapFunc<R, T> f, Trap::Ptr* out_trap) {
   auto rhs = Pop<T>();
   auto lhs = Pop<T>();
   T out;
@@ -1727,7 +1713,7 @@ RunResult Thread::DoBinop(Store& store,
 }
 
 template <typename R, typename T>
-RunResult Thread::DoConvert(Store& store, Trap::Ptr* out_trap) {
+RunResult Thread::DoConvert(Trap::Ptr* out_trap) {
   auto val = Pop<T>();
   TRAP_UNLESS(CanConvert<R>(val), "integer overflow");
   Push<R>(static_cast<R>(val));
@@ -1740,12 +1726,9 @@ RunResult Thread::DoReinterpret() {
   return RunResult::Ok;
 }
 
-RunResult Thread::DoMemoryInit(Store& store,
-                               Instance::Ptr& inst,
-                               Instr instr,
-                               Trap::Ptr* out_trap) {
-  Memory::Ptr memory{store, inst->memories()[instr.imm_u32x2.fst]};
-  auto&& data = inst->datas()[instr.imm_u32x2.snd];
+RunResult Thread::DoMemoryInit(Instr instr, Trap::Ptr* out_trap) {
+  Memory::Ptr memory{store_, inst_->memories()[instr.imm_u32x2.fst]};
+  auto&& data = inst_->datas()[instr.imm_u32x2.snd];
   auto size = Pop<u32>();
   auto src = Pop<u32>();
   auto dst = Pop<u32>();
@@ -1754,17 +1737,14 @@ RunResult Thread::DoMemoryInit(Store& store,
   return RunResult::Ok;
 }
 
-RunResult Thread::DoDataDrop(Instance::Ptr& inst, Instr instr) {
-  inst->datas()[instr.imm_u32].Drop();
+RunResult Thread::DoDataDrop(Instr instr) {
+  inst_->datas()[instr.imm_u32].Drop();
   return RunResult::Ok;
 }
 
-RunResult Thread::DoMemoryCopy(Store& store,
-                               Instance::Ptr& inst,
-                               Instr instr,
-                               Trap::Ptr* out_trap) {
-  Memory::Ptr mem_dst{store, inst->memories()[instr.imm_u32x2.fst]};
-  Memory::Ptr mem_src{store, inst->memories()[instr.imm_u32x2.snd]};
+RunResult Thread::DoMemoryCopy(Instr instr, Trap::Ptr* out_trap) {
+  Memory::Ptr mem_dst{store_, inst_->memories()[instr.imm_u32x2.fst]};
+  Memory::Ptr mem_src{store_, inst_->memories()[instr.imm_u32x2.snd]};
   auto size = Pop<u32>();
   auto src = Pop<u32>();
   auto dst = Pop<u32>();
@@ -1773,11 +1753,8 @@ RunResult Thread::DoMemoryCopy(Store& store,
   return RunResult::Ok;
 }
 
-RunResult Thread::DoMemoryFill(Store& store,
-                               Instance::Ptr& inst,
-                               Instr instr,
-                               Trap::Ptr* out_trap) {
-  Memory::Ptr memory{store, inst->memories()[instr.imm_u32]};
+RunResult Thread::DoMemoryFill(Instr instr, Trap::Ptr* out_trap) {
+  Memory::Ptr memory{store_, inst_->memories()[instr.imm_u32]};
   auto size = Pop<u32>();
   auto value = Pop<u32>();
   auto dst = Pop<u32>();
@@ -1785,44 +1762,35 @@ RunResult Thread::DoMemoryFill(Store& store,
   return RunResult::Ok;
 }
 
-RunResult Thread::DoTableInit(Store& store,
-                              Instance::Ptr& inst,
-                              Instr instr,
-                              Trap::Ptr* out_trap) {
-  Table::Ptr table{store, inst->tables()[instr.imm_u32x2.fst]};
-  auto&& elem = inst->elems()[instr.imm_u32x2.snd];
+RunResult Thread::DoTableInit(Instr instr, Trap::Ptr* out_trap) {
+  Table::Ptr table{store_, inst_->tables()[instr.imm_u32x2.fst]};
+  auto&& elem = inst_->elems()[instr.imm_u32x2.snd];
   auto size = Pop<u32>();
   auto src = Pop<u32>();
   auto dst = Pop<u32>();
-  TRAP_IF(Failed(table->Init(store, dst, elem, src, size)),
+  TRAP_IF(Failed(table->Init(store_, dst, elem, src, size)),
           "table.init out of bounds");
   return RunResult::Ok;
 }
 
-RunResult Thread::DoElemDrop(Instance::Ptr& inst, Instr instr) {
-  inst->elems()[instr.imm_u32].Drop();
+RunResult Thread::DoElemDrop(Instr instr) {
+  inst_->elems()[instr.imm_u32].Drop();
   return RunResult::Ok;
 }
 
-RunResult Thread::DoTableCopy(Store& store,
-                              Instance::Ptr& inst,
-                              Instr instr,
-                              Trap::Ptr* out_trap) {
-  Table::Ptr table_dst{store, inst->tables()[instr.imm_u32x2.fst]};
-  Table::Ptr table_src{store, inst->tables()[instr.imm_u32x2.snd]};
+RunResult Thread::DoTableCopy(Instr instr, Trap::Ptr* out_trap) {
+  Table::Ptr table_dst{store_, inst_->tables()[instr.imm_u32x2.fst]};
+  Table::Ptr table_src{store_, inst_->tables()[instr.imm_u32x2.snd]};
   auto size = Pop<u32>();
   auto src = Pop<u32>();
   auto dst = Pop<u32>();
-  TRAP_IF(Failed(Table::Copy(store, *table_dst, dst, *table_src, src, size)),
+  TRAP_IF(Failed(Table::Copy(store_, *table_dst, dst, *table_src, src, size)),
           "table.copy out of bounds");
   return RunResult::Ok;
 }
 
-RunResult Thread::DoTableGet(Store& store,
-                             Instance::Ptr& inst,
-                             Instr instr,
-                             Trap::Ptr* out_trap) {
-  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
+RunResult Thread::DoTableGet(Instr instr, Trap::Ptr* out_trap) {
+  Table::Ptr table{store_, inst_->tables()[instr.imm_u32]};
   auto index = Pop<u32>();
   Ref ref;
   TRAP_IF(
@@ -1832,28 +1800,22 @@ RunResult Thread::DoTableGet(Store& store,
   return RunResult::Ok;
 }
 
-RunResult Thread::DoTableSet(Store& store,
-                             Instance::Ptr& inst,
-                             Instr instr,
-                             Trap::Ptr* out_trap) {
-  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
+RunResult Thread::DoTableSet(Instr instr, Trap::Ptr* out_trap) {
+  Table::Ptr table{store_, inst_->tables()[instr.imm_u32]};
   auto ref = Pop<Ref>();
   auto index = Pop<u32>();
   TRAP_IF(
-      Failed(table->Set(store, index, ref)),
+      Failed(table->Set(store_, index, ref)),
       StringPrintf("table.set at %u >= max value %u", index, table->size()));
   return RunResult::Ok;
 }
 
-RunResult Thread::DoTableGrow(Store& store,
-                              Instance::Ptr& inst,
-                              Instr instr,
-                              Trap::Ptr* out_trap) {
-  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
+RunResult Thread::DoTableGrow(Instr instr, Trap::Ptr* out_trap) {
+  Table::Ptr table{store_, inst_->tables()[instr.imm_u32]};
   u32 old_size = table->size();
   auto delta = Pop<u32>();
   auto ref = Pop<Ref>();
-  if (Failed(table->Grow(store, delta, ref))) {
+  if (Failed(table->Grow(store_, delta, ref))) {
     Push<s32>(-1);
   } else {
     Push<u32>(old_size);
@@ -1861,21 +1823,18 @@ RunResult Thread::DoTableGrow(Store& store,
   return RunResult::Ok;
 }
 
-RunResult Thread::DoTableSize(Store& store, Instance::Ptr& inst, Instr instr) {
-  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
+RunResult Thread::DoTableSize(Instr instr) {
+  Table::Ptr table{store_, inst_->tables()[instr.imm_u32]};
   Push<u32>(table->size());
   return RunResult::Ok;
 }
 
-RunResult Thread::DoTableFill(Store& store,
-                              Instance::Ptr& inst,
-                              Instr instr,
-                              Trap::Ptr* out_trap) {
-  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
+RunResult Thread::DoTableFill(Instr instr, Trap::Ptr* out_trap) {
+  Table::Ptr table{store_, inst_->tables()[instr.imm_u32]};
   auto size = Pop<u32>();
   auto value = Pop<Ref>();
   auto dst = Pop<u32>();
-  TRAP_IF(Failed(table->Fill(store, dst, value, size)),
+  TRAP_IF(Failed(table->Fill(store_, dst, value, size)),
           "table.fill out of bounds");
   return RunResult::Ok;
 }
@@ -1960,12 +1919,9 @@ RunResult Thread::DoSimdShift(BinopFunc<R, T> f) {
 }
 
 template <typename S, typename T>
-RunResult Thread::DoSimdLoadSplat(Store& store,
-                                  Instance::Ptr& inst,
-                                  Instr instr,
-                                  Trap::Ptr* out_trap) {
+RunResult Thread::DoSimdLoadSplat(Instr instr, Trap::Ptr* out_trap) {
   using L = typename S::LaneType;
-  if (DoLoad<L>(store, inst, instr, out_trap) != RunResult::Ok) {
+  if (DoLoad<L>(instr, out_trap) != RunResult::Ok) {
     return RunResult::Trap;
   }
   return DoSimdSplat<S, T>();
