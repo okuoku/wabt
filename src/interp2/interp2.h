@@ -444,6 +444,7 @@ using Finalizer = void (*)(void* user_data);
 class Object {
  public:
   static bool classof(const Object* obj);
+  using Ptr = RefPtr<Object>;
 
   Object(const Object&) = delete;
   Object& operator=(const Object&) = delete;
@@ -468,8 +469,9 @@ class Foreign : public Object {
  public:
   static const ObjectKind skind = ObjectKind::Foreign;
   static bool classof(const Object* obj);
+  using Ptr = RefPtr<Foreign>;
 
-  static RefPtr<Foreign> New(Store&, void*);
+  static Foreign::Ptr New(Store&, void*);
 
   void* ptr();
 
@@ -485,11 +487,11 @@ class Trap : public Object {
  public:
   static const ObjectKind skind = ObjectKind::Trap;
   static bool classof(const Object* obj);
+  using Ptr = RefPtr<Trap>;
 
-  static RefPtr<Trap> New(
-      Store&,
-      const std::string& msg,
-      const std::vector<Frame>& trace = std::vector<Frame>());
+  static Trap::Ptr New(Store&,
+                       const std::string& msg,
+                       const std::vector<Frame>& trace = std::vector<Frame>());
 
   std::string message() const;
 
@@ -507,8 +509,9 @@ class Trap : public Object {
 class Extern : public Object {
  public:
   static bool classof(const Object* obj);
+  using Ptr = RefPtr<Extern>;
 
-  virtual Result Match(Store&, const ImportType&, RefPtr<Trap>* out_trap) = 0;
+  virtual Result Match(Store&, const ImportType&, Trap::Ptr* out_trap) = 0;
 
  protected:
   friend Store;
@@ -518,17 +521,18 @@ class Extern : public Object {
   Result MatchImpl(Store&,
                    const ImportType&,
                    const T& actual,
-                   RefPtr<Trap>* out_trap);
+                   Trap::Ptr* out_trap);
 };
 
 class Func : public Extern {
  public:
   static bool classof(const Object* obj);
+  using Ptr = RefPtr<Func>;
 
   virtual Result Call(Store&,
                       const TypedValues& params,
                       TypedValues* out_results,
-                      RefPtr<Trap>* out_trap) = 0;
+                      Trap::Ptr* out_trap) = 0;
 
   const FuncType& func_type();
 
@@ -542,15 +546,16 @@ class DefinedFunc : public Func {
  public:
   static bool classof(const Object* obj);
   static const ObjectKind skind = ObjectKind::DefinedFunc;
+  using Ptr = RefPtr<DefinedFunc>;
 
-  static RefPtr<DefinedFunc> New(Store&, Ref instance, FuncDesc);
+  static DefinedFunc::Ptr New(Store&, Ref instance, FuncDesc);
 
-  Result Match(Store&, const ImportType&, RefPtr<Trap>* out_trap) override;
+  Result Match(Store&, const ImportType&, Trap::Ptr* out_trap) override;
 
   Result Call(Store&,
               const TypedValues& params,
               TypedValues* out_results,
-              RefPtr<Trap>* out_trap) override;
+              Trap::Ptr* out_trap) override;
 
   Ref instance() const;
   const FuncDesc& desc() const;
@@ -568,20 +573,22 @@ class HostFunc : public Func {
  public:
   static bool classof(const Object* obj);
   static const ObjectKind skind = ObjectKind::HostFunc;
+  using Ptr = RefPtr<HostFunc>;
 
   using Callback = Result (*)(const TypedValues& params,
                               TypedValues* out_results,
                               std::string* out_msg,
                               void* user_data);
 
-  static RefPtr<HostFunc> New(Store&, FuncType, Callback, void* user_data);
+  static HostFunc::Ptr New(Store&, FuncType, Callback, void* user_data);
 
-  Result Match(Store&, const ImportType&, RefPtr<Trap>* out_trap) override;
+  Result Match(Store&, const ImportType&, Trap::Ptr* out_trap) override;
 
   Result Call(Store&,
               const TypedValues& params,
               TypedValues* out_results,
-              RefPtr<Trap>* out_trap) override;
+              Trap::Ptr* out_trap) override;
+
  private:
   friend Store;
   explicit HostFunc(Store&, FuncType, Callback, void* user_data);
@@ -595,10 +602,11 @@ class Table : public Extern {
  public:
   static bool classof(const Object* obj);
   static const ObjectKind skind = ObjectKind::Table;
+  using Ptr = RefPtr<Table>;
 
-  static RefPtr<Table> New(Store&, TableDesc);
+  static Table::Ptr New(Store&, TableDesc);
 
-  Result Match(Store&, const ImportType&, RefPtr<Trap>* out_trap) override;
+  Result Match(Store&, const ImportType&, Trap::Ptr* out_trap) override;
 
   bool IsValidRange(u32 offset, u32 size) const;
 
@@ -638,10 +646,11 @@ class Memory : public Extern {
  public:
   static bool classof(const Object* obj);
   static const ObjectKind skind = ObjectKind::Memory;
+  using Ptr = RefPtr<Memory>;
 
-  static RefPtr<Memory> New(Store&, MemoryDesc);
+  static Memory::Ptr New(Store&, MemoryDesc);
 
-  Result Match(Store&, const ImportType&, RefPtr<Trap>* out_trap) override;
+  Result Match(Store&, const ImportType&, Trap::Ptr* out_trap) override;
 
   bool IsValidAccess(u32 offset, u32 addend, size_t size) const;
 
@@ -679,10 +688,11 @@ class Global : public Extern {
  public:
   static bool classof(const Object* obj);
   static const ObjectKind skind = ObjectKind::Global;
+  using Ptr = RefPtr<Global>;
 
-  static RefPtr<Global> New(Store&, GlobalDesc, Value);
+  static Global::Ptr New(Store&, GlobalDesc, Value);
 
-  Result Match(Store&, const ImportType&, RefPtr<Trap>* out_trap) override;
+  Result Match(Store&, const ImportType&, Trap::Ptr* out_trap) override;
 
   Value Get() const;
   template <typename T>
@@ -708,10 +718,11 @@ class Event : public Extern {
  public:
   static bool classof(const Object* obj);
   static const ObjectKind skind = ObjectKind::Event;
+  using Ptr = RefPtr<Event>;
 
-  static RefPtr<Event> New(Store&, EventDesc);
+  static Event::Ptr New(Store&, EventDesc);
 
-  Result Match(Store&, const ImportType&, RefPtr<Trap>* out_trap) override;
+  Result Match(Store&, const ImportType&, Trap::Ptr* out_trap) override;
 
  private:
   friend Store;
@@ -759,8 +770,9 @@ class Module : public Object {
  public:
   static bool classof(const Object* obj);
   static const ObjectKind skind = ObjectKind::Module;
+  using Ptr = RefPtr<Module>;
 
-  static RefPtr<Module> New(Store&, ModuleDesc);
+  static Module::Ptr New(Store&, ModuleDesc);
 
   const ModuleDesc& desc() const;
   const std::vector<ImportType>& import_types() const;
@@ -781,11 +793,12 @@ class Instance : public Object {
  public:
   static bool classof(const Object* obj);
   static const ObjectKind skind = ObjectKind::Instance;
+  using Ptr = RefPtr<Instance>;
 
-  static RefPtr<Instance> Instantiate(Store&,
-                                      Ref module,
-                                      const RefVec& imports,
-                                      RefPtr<Trap>* out_trap);
+  static Instance::Ptr Instantiate(Store&,
+                                   Ref module,
+                                   const RefVec& imports,
+                                   Trap::Ptr* out_trap);
 
   Ref module() const;
   const RefVec& imports() const;
@@ -833,6 +846,7 @@ class Thread : public Object {
  public:
   static bool classof(const Object* obj);
   static const ObjectKind skind = ObjectKind::Thread;
+  using Ptr = RefPtr<Thread>;
 
   struct Options {
     static const u32 kDefaultValueStackSize = 64 * 1024 / sizeof(Value);
@@ -842,11 +856,11 @@ class Thread : public Object {
     u32 call_stack_size = kDefaultCallStackSize;
   };
 
-  static RefPtr<Thread> New(Store&, const Options&);
+  static Thread::Ptr New(Store&, const Options&);
 
-  RunResult Run(Store&, RefPtr<Trap>* out_trap);
-  RunResult Run(Store&, int num_instructions, RefPtr<Trap>* out_trap);
-  RunResult Step(Store&, RefPtr<Trap>* out_trap);
+  RunResult Run(Store&, Trap::Ptr* out_trap);
+  RunResult Run(Store&, int num_instructions, Trap::Ptr* out_trap);
+  RunResult Step(Store&, Trap::Ptr* out_trap);
 
  private:
   friend Store;
@@ -857,8 +871,8 @@ class Thread : public Object {
 
   void PushCall(Ref func, u32 offset);
   RunResult PopCall();
-  RunResult DoCall(const RefPtr<Func>&, RefPtr<Trap>* out_trap);
-  RunResult DoReturnCall(const RefPtr<Func>&, RefPtr<Trap>* out_trap);
+  RunResult DoCall(const Func::Ptr&, Trap::Ptr* out_trap);
+  RunResult DoReturnCall(const Func::Ptr&, Trap::Ptr* out_trap);
 
   void PushValues(const TypedValues&);
   void CopyValues(Store&, const ValueTypes&, TypedValues*);
@@ -886,40 +900,40 @@ class Thread : public Object {
   template <typename R, typename T>
   RunResult DoUnop(UnopFunc<R, T>);
   template <typename R, typename T>
-  RunResult DoUnop(Store&, UnopTrapFunc<R, T>, RefPtr<Trap>* out_trap);
+  RunResult DoUnop(Store&, UnopTrapFunc<R, T>, Trap::Ptr* out_trap);
   template <typename R, typename T>
   RunResult DoBinop(BinopFunc<R, T>);
   template <typename R, typename T>
-  RunResult DoBinop(Store&, BinopTrapFunc<R, T>, RefPtr<Trap>* out_trap);
+  RunResult DoBinop(Store&, BinopTrapFunc<R, T>, Trap::Ptr* out_trap);
 
   template <typename R, typename T>
-  RunResult DoConvert(Store&, RefPtr<Trap>* out_trap);
+  RunResult DoConvert(Store&, Trap::Ptr* out_trap);
   template <typename R, typename T>
   RunResult DoReinterpret();
 
   template <typename T, typename V = T>
-  RunResult DoLoad(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+  RunResult DoLoad(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
   template <typename T, typename V = T>
-  RunResult DoStore(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+  RunResult DoStore(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
 
-  RunResult DoMemoryInit(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
-  RunResult DoDataDrop(RefPtr<Instance>&, Instr);
-  RunResult DoMemoryCopy(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
-  RunResult DoMemoryFill(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+  RunResult DoMemoryInit(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoDataDrop(Instance::Ptr&, Instr);
+  RunResult DoMemoryCopy(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoMemoryFill(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
 
-  RunResult DoTableInit(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
-  RunResult DoElemDrop(RefPtr<Instance>&, Instr);
-  RunResult DoTableCopy(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
-  RunResult DoTableGet(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
-  RunResult DoTableSet(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
-  RunResult DoTableGrow(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
-  RunResult DoTableSize(Store&, RefPtr<Instance>&, Instr);
-  RunResult DoTableFill(Store&, RefPtr<Instance>&, Instr, RefPtr<Trap>* out_trap);
+  RunResult DoTableInit(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoElemDrop(Instance::Ptr&, Instr);
+  RunResult DoTableCopy(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoTableGet(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoTableSet(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoTableGrow(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
+  RunResult DoTableSize(Store&, Instance::Ptr&, Instr);
+  RunResult DoTableFill(Store&, Instance::Ptr&, Instr, Trap::Ptr* out_trap);
 
   RunResult StepInternal(Store&,
-                         RefPtr<Instance>&,
-                         RefPtr<Module>&,
-                         RefPtr<Trap>* out_trap);
+                         Instance::Ptr&,
+                         Module::Ptr&,
+                         Trap::Ptr* out_trap);
 
   std::vector<Frame> frames_;
   std::vector<Value> values_;

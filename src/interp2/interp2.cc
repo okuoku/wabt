@@ -266,7 +266,7 @@ template <typename T>
 Result Extern::MatchImpl(Store& store,
                          const ImportType& import_type,
                          const T& actual,
-                         RefPtr<Trap>* out_trap) {
+                         Trap::Ptr* out_trap) {
   const T* extern_type = dyn_cast<T>(import_type.type.get());
   if (!extern_type) {
     *out_trap = Trap::New(
@@ -299,15 +299,15 @@ void DefinedFunc::Mark(Store& store) {
 
 Result DefinedFunc::Match(Store& store,
                           const ImportType& import_type,
-                          RefPtr<Trap>* out_trap) {
+                          Trap::Ptr* out_trap) {
   return MatchImpl(store, import_type, type_, out_trap);
 }
 
 Result DefinedFunc::Call(Store& store,
                          const TypedValues& params,
                          TypedValues* out_results,
-                         RefPtr<Trap>* out_trap) {
-  RefPtr<Thread> thread = Thread::New(store, Thread::Options());
+                         Trap::Ptr* out_trap) {
+  Thread::Ptr thread = Thread::New(store, Thread::Options());
   assert(params.size() == type_.params.size());
   thread->PushValues(params);
   thread->PushCall(self_, desc_.code_offset);
@@ -327,14 +327,14 @@ void HostFunc::Mark(Store&) {}
 
 Result HostFunc::Match(Store& store,
                        const ImportType& import_type,
-                       RefPtr<Trap>* out_trap) {
+                       Trap::Ptr* out_trap) {
   return MatchImpl(store, import_type, type_, out_trap);
 }
 
 Result HostFunc::Call(Store& store,
                       const TypedValues& params,
                       TypedValues* out_results,
-                      RefPtr<Trap>* out_trap) {
+                      Trap::Ptr* out_trap) {
   std::string msg;
   Result result = callback_(params, out_results, &msg, user_data_);
   if (Failed(result)) {
@@ -354,7 +354,7 @@ void Table::Mark(Store& store) {
 
 Result Table::Match(Store& store,
                     const ImportType& import_type,
-                    RefPtr<Trap>* out_trap) {
+                    Trap::Ptr* out_trap) {
   return MatchImpl(store, import_type, desc_.type, out_trap);
 }
 
@@ -451,7 +451,7 @@ void Memory::Mark(class Store&) {}
 
 Result Memory::Match(class Store& store,
                      const ImportType& import_type,
-                     RefPtr<Trap>* out_trap) {
+                     Trap::Ptr* out_trap) {
   return MatchImpl(store, import_type, desc_.type, out_trap);
 }
 
@@ -512,7 +512,7 @@ Value Instance::ResolveInitExpr(Store& store, InitExpr init) {
     case InitExprKind::F64:      result.Set(init.f64); break;
     case InitExprKind::V128:     result.Set(init.v128); break;
     case InitExprKind::GlobalGet: {
-      RefPtr<Global> global{store, globals_[init.index]};
+      Global::Ptr global{store, globals_[init.index]};
       result = global->Get();
       break;
     }
@@ -539,7 +539,7 @@ void Global::Mark(Store& store) {
 
 Result Global::Match(Store& store,
                      const ImportType& import_type,
-                     RefPtr<Trap>* out_trap) {
+                     Trap::Ptr* out_trap) {
   return MatchImpl(store, import_type, desc_.type, out_trap);
 }
 
@@ -562,12 +562,12 @@ void Event::Mark(Store&) {}
 
 Result Event::Match(Store& store,
                     const ImportType& import_type,
-                    RefPtr<Trap>* out_trap) {
+                    Trap::Ptr* out_trap) {
   return MatchImpl(store, import_type, desc_.type, out_trap);
 }
 
 //// ElemSegment ////
-ElemSegment::ElemSegment(const ElemDesc* desc, RefPtr<Instance>& inst)
+ElemSegment::ElemSegment(const ElemDesc* desc, Instance::Ptr& inst)
     : desc_(desc) {
   elements_.reserve(desc->elements.size());
   for (auto&& elem_expr : desc->elements) {
@@ -622,12 +622,12 @@ Instance::Instance(Store& store, Ref module) : Object(skind), module_(module) {
 }
 
 // static
-RefPtr<Instance> Instance::Instantiate(Store& store,
-                                       Ref module,
-                                       const RefVec& imports,
-                                       RefPtr<Trap>* out_trap) {
-  RefPtr<Module> mod{store, module};
-  RefPtr<Instance> inst = store.Alloc<Instance>(store, module);
+Instance::Ptr Instance::Instantiate(Store& store,
+                                    Ref module,
+                                    const RefVec& imports,
+                                    Trap::Ptr* out_trap) {
+  Module::Ptr mod{store, module};
+  Instance::Ptr inst = store.Alloc<Instance>(store, module);
 
   size_t import_desc_count = mod->desc().imports.size();
   if (imports.size() > import_desc_count) {
@@ -639,7 +639,7 @@ RefPtr<Instance> Instance::Instantiate(Store& store,
   for (size_t i = 0; i < import_desc_count; ++i) {
     auto&& import_desc = mod->desc().imports[i];
     Ref extern_ref = imports[i];
-    RefPtr<Extern> extern_{store, extern_ref};
+    Extern::Ptr extern_{store, extern_ref};
     if (Failed(extern_->Match(store, import_desc.type, out_trap))) {
       return {};
     }
@@ -713,7 +713,7 @@ RefPtr<Instance> Instance::Instantiate(Store& store,
       auto&& desc = segment.desc();
       if (desc.mode == SegmentMode::Active) {
         Result result;
-        RefPtr<Table> table{store, inst->tables_[desc.table_index]};
+        Table::Ptr table{store, inst->tables_[desc.table_index]};
         u32 offset = inst->ResolveInitExpr(store, desc.offset).Get<u32>();
         if (pass == Check) {
           result = table->IsValidRange(offset, segment.size()) ? Result::Ok
@@ -735,7 +735,7 @@ RefPtr<Instance> Instance::Instantiate(Store& store,
       auto&& desc = segment.desc();
       if (desc.mode == SegmentMode::Active) {
         Result result;
-        RefPtr<Memory> memory{store, inst->tables_[desc.memory_index]};
+        Memory::Ptr memory{store, inst->tables_[desc.memory_index]};
         u32 offset = inst->ResolveInitExpr(store, desc.offset).Get<u32>();
         if (pass == Check) {
           result = memory->IsValidAccess(offset, 0, segment.size())
@@ -756,7 +756,7 @@ RefPtr<Instance> Instance::Instantiate(Store& store,
 
   // Start.
   for (auto&& start : mod->desc().starts) {
-    RefPtr<Func> func{store, inst->funcs_[start.func_index]};
+    Func::Ptr func{store, inst->funcs_[start.func_index]};
     TypedValues results;
     if (Failed(func->Call(store, {}, &results, out_trap))) {
       return {};
@@ -817,7 +817,7 @@ RunResult Thread::PopCall() {
   return RunResult::Ok;
 }
 
-RunResult Thread::DoCall(const RefPtr<Func>& func, RefPtr<Trap>* out_trap) {
+RunResult Thread::DoCall(const Func::Ptr& func, Trap::Ptr* out_trap) {
   if (auto* host_func = dyn_cast<HostFunc>(func.get())) {
     // TODO
   } else {
@@ -827,8 +827,7 @@ RunResult Thread::DoCall(const RefPtr<Func>& func, RefPtr<Trap>* out_trap) {
   return RunResult::Ok;
 }
 
-RunResult Thread::DoReturnCall(const RefPtr<Func>& func,
-                               RefPtr<Trap>* out_trap) {
+RunResult Thread::DoReturnCall(const Func::Ptr& func, Trap::Ptr* out_trap) {
   // TODO
   return RunResult::Ok;
 }
@@ -844,7 +843,7 @@ void Thread::CopyValues(Store& store,
   }
 }
 
-RunResult Thread::Run(Store& store, RefPtr<Trap>* out_trap) {
+RunResult Thread::Run(Store& store, Trap::Ptr* out_trap) {
   const int kDefaultInstructionCount = 1000;
   RunResult result;
   do {
@@ -853,12 +852,10 @@ RunResult Thread::Run(Store& store, RefPtr<Trap>* out_trap) {
   return result;
 }
 
-RunResult Thread::Run(Store& store,
-                      int num_instructions,
-                      RefPtr<Trap>* out_trap) {
-  RefPtr<DefinedFunc> func{store, frames_.back().func};
-  RefPtr<Instance> inst{store, func->instance()};
-  RefPtr<Module> mod{store, inst->module()};
+RunResult Thread::Run(Store& store, int num_instructions, Trap::Ptr* out_trap) {
+  DefinedFunc::Ptr func{store, frames_.back().func};
+  Instance::Ptr inst{store, func->instance()};
+  Module::Ptr mod{store, inst->module()};
   for (;num_instructions > 0; --num_instructions) {
     auto result = StepInternal(store, inst, mod, out_trap);
     if (result != RunResult::Ok) {
@@ -868,10 +865,10 @@ RunResult Thread::Run(Store& store,
   return RunResult::Ok;
 }
 
-RunResult Thread::Step(Store& store, RefPtr<Trap>* out_trap) {
-  RefPtr<DefinedFunc> func{store, frames_.back().func};
-  RefPtr<Instance> inst{store, func->instance()};
-  RefPtr<Module> mod{store, inst->module()};
+RunResult Thread::Step(Store& store, Trap::Ptr* out_trap) {
+  DefinedFunc::Ptr func{store, frames_.back().func};
+  Instance::Ptr inst{store, func->instance()};
+  Module::Ptr mod{store, inst->module()};
   return StepInternal(store, inst, mod, out_trap);
 }
 
@@ -928,7 +925,7 @@ RunResult Thread::DoUnop(UnopFunc<R, T> f) {
 template <typename R, typename T>
 RunResult Thread::DoUnop(Store& store,
                          UnopTrapFunc<R, T> f,
-                         RefPtr<Trap>* out_trap) {
+                         Trap::Ptr* out_trap) {
   T out;
   std::string msg;
   TRAP_IF(f(Pop<T>(), &out, &msg) == RunResult::Trap, msg);
@@ -947,7 +944,7 @@ RunResult Thread::DoBinop(BinopFunc<R, T> f) {
 template <typename R, typename T>
 RunResult Thread::DoBinop(Store& store,
                           BinopTrapFunc<R, T> f,
-                          RefPtr<Trap>* out_trap) {
+                          Trap::Ptr* out_trap) {
   auto rhs = Pop<T>();
   auto lhs = Pop<T>();
   T out;
@@ -968,7 +965,7 @@ template <> bool CanConvert<u64, f32>(f32 val) { return val > -1.f && val < 1844
 template <> bool CanConvert<u64, f64>(f64 val) { return val > -1. && val < 18446744073709551616.; }
 
 template <typename R, typename T>
-RunResult Thread::DoConvert(Store& store, RefPtr<Trap>* out_trap) {
+RunResult Thread::DoConvert(Store& store, Trap::Ptr* out_trap) {
   auto val = Pop<T>();
   TRAP_UNLESS(CanConvert<R>(val), "integer overflow");
   Push<R>(static_cast<R>(val));
@@ -995,10 +992,10 @@ R IntTruncSat(T val) {
 
 template <typename T, typename V>
 RunResult Thread::DoLoad(Store& store,
-                         RefPtr<Instance>& inst,
+                         Instance::Ptr& inst,
                          Instr instr,
-                         RefPtr<Trap>* out_trap) {
-  RefPtr<Memory> memory{store, inst->memories()[instr.imm_u32x2.fst]};
+                         Trap::Ptr* out_trap) {
+  Memory::Ptr memory{store, inst->memories()[instr.imm_u32x2.fst]};
   u32 offset = Pop<u32>();
   V val;
   TRAP_IF(Failed(memory->Load(offset, instr.imm_u32x2.snd, &val)),
@@ -1010,10 +1007,10 @@ RunResult Thread::DoLoad(Store& store,
 
 template <typename T, typename V>
 RunResult Thread::DoStore(Store& store,
-                          RefPtr<Instance>& inst,
+                          Instance::Ptr& inst,
                           Instr instr,
-                          RefPtr<Trap>* out_trap) {
-  RefPtr<Memory> memory{store, inst->memories()[instr.imm_u32x2.fst]};
+                          Trap::Ptr* out_trap) {
+  Memory::Ptr memory{store, inst->memories()[instr.imm_u32x2.fst]};
   u32 offset = Pop<u32>();
   T val = static_cast<T>(Pop<V>());
   TRAP_IF(Failed(memory->Store(offset, instr.imm_u32x2.snd, val)),
@@ -1023,10 +1020,10 @@ RunResult Thread::DoStore(Store& store,
 }
 
 RunResult Thread::DoMemoryInit(Store& store,
-                               RefPtr<Instance>& inst,
+                               Instance::Ptr& inst,
                                Instr instr,
-                               RefPtr<Trap>* out_trap) {
-  RefPtr<Memory> memory{store, inst->memories()[instr.imm_u32x2.fst]};
+                               Trap::Ptr* out_trap) {
+  Memory::Ptr memory{store, inst->memories()[instr.imm_u32x2.fst]};
   auto&& data = inst->datas()[instr.imm_u32x2.snd];
   auto size = Pop<u32>();
   auto src = Pop<u32>();
@@ -1036,17 +1033,17 @@ RunResult Thread::DoMemoryInit(Store& store,
   return RunResult::Ok;
 }
 
-RunResult Thread::DoDataDrop(RefPtr<Instance>& inst, Instr instr) {
+RunResult Thread::DoDataDrop(Instance::Ptr& inst, Instr instr) {
   inst->datas()[instr.imm_u32].Drop();
   return RunResult::Ok;
 }
 
 RunResult Thread::DoMemoryCopy(Store& store,
-                               RefPtr<Instance>& inst,
+                               Instance::Ptr& inst,
                                Instr instr,
-                               RefPtr<Trap>* out_trap) {
-  RefPtr<Memory> mem_dst{store, inst->memories()[instr.imm_u32x2.fst]};
-  RefPtr<Memory> mem_src{store, inst->memories()[instr.imm_u32x2.snd]};
+                               Trap::Ptr* out_trap) {
+  Memory::Ptr mem_dst{store, inst->memories()[instr.imm_u32x2.fst]};
+  Memory::Ptr mem_src{store, inst->memories()[instr.imm_u32x2.snd]};
   auto size = Pop<u32>();
   auto src = Pop<u32>();
   auto dst = Pop<u32>();
@@ -1056,10 +1053,10 @@ RunResult Thread::DoMemoryCopy(Store& store,
 }
 
 RunResult Thread::DoMemoryFill(Store& store,
-                               RefPtr<Instance>& inst,
+                               Instance::Ptr& inst,
                                Instr instr,
-                               RefPtr<Trap>* out_trap) {
-  RefPtr<Memory> memory{store, inst->memories()[instr.imm_u32]};
+                               Trap::Ptr* out_trap) {
+  Memory::Ptr memory{store, inst->memories()[instr.imm_u32]};
   auto size = Pop<u32>();
   auto value = Pop<u32>();
   auto dst = Pop<u32>();
@@ -1068,10 +1065,10 @@ RunResult Thread::DoMemoryFill(Store& store,
 }
 
 RunResult Thread::DoTableInit(Store& store,
-                              RefPtr<Instance>& inst,
+                              Instance::Ptr& inst,
                               Instr instr,
-                              RefPtr<Trap>* out_trap) {
-  RefPtr<Table> table{store, inst->tables()[instr.imm_u32x2.fst]};
+                              Trap::Ptr* out_trap) {
+  Table::Ptr table{store, inst->tables()[instr.imm_u32x2.fst]};
   auto&& elem = inst->elems()[instr.imm_u32x2.snd];
   auto size = Pop<u32>();
   auto src = Pop<u32>();
@@ -1081,17 +1078,17 @@ RunResult Thread::DoTableInit(Store& store,
   return RunResult::Ok;
 }
 
-RunResult Thread::DoElemDrop(RefPtr<Instance>& inst, Instr instr) {
+RunResult Thread::DoElemDrop(Instance::Ptr& inst, Instr instr) {
   inst->elems()[instr.imm_u32].Drop();
   return RunResult::Ok;
 }
 
 RunResult Thread::DoTableCopy(Store& store,
-                              RefPtr<Instance>& inst,
+                              Instance::Ptr& inst,
                               Instr instr,
-                              RefPtr<Trap>* out_trap) {
-  RefPtr<Table> table_dst{store, inst->tables()[instr.imm_u32x2.fst]};
-  RefPtr<Table> table_src{store, inst->tables()[instr.imm_u32x2.snd]};
+                              Trap::Ptr* out_trap) {
+  Table::Ptr table_dst{store, inst->tables()[instr.imm_u32x2.fst]};
+  Table::Ptr table_src{store, inst->tables()[instr.imm_u32x2.snd]};
   auto size = Pop<u32>();
   auto src = Pop<u32>();
   auto dst = Pop<u32>();
@@ -1101,10 +1098,10 @@ RunResult Thread::DoTableCopy(Store& store,
 }
 
 RunResult Thread::DoTableGet(Store& store,
-                             RefPtr<Instance>& inst,
+                             Instance::Ptr& inst,
                              Instr instr,
-                             RefPtr<Trap>* out_trap) {
-  RefPtr<Table> table{store, inst->tables()[instr.imm_u32]};
+                             Trap::Ptr* out_trap) {
+  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
   auto index = Pop<u32>();
   Ref ref;
   TRAP_IF(
@@ -1115,10 +1112,10 @@ RunResult Thread::DoTableGet(Store& store,
 }
 
 RunResult Thread::DoTableSet(Store& store,
-                             RefPtr<Instance>& inst,
+                             Instance::Ptr& inst,
                              Instr instr,
-                             RefPtr<Trap>* out_trap) {
-  RefPtr<Table> table{store, inst->tables()[instr.imm_u32]};
+                             Trap::Ptr* out_trap) {
+  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
   auto ref = Pop<Ref>();
   auto index = Pop<u32>();
   TRAP_IF(
@@ -1128,10 +1125,10 @@ RunResult Thread::DoTableSet(Store& store,
 }
 
 RunResult Thread::DoTableGrow(Store& store,
-                              RefPtr<Instance>& inst,
+                              Instance::Ptr& inst,
                               Instr instr,
-                              RefPtr<Trap>* out_trap) {
-  RefPtr<Table> table{store, inst->tables()[instr.imm_u32]};
+                              Trap::Ptr* out_trap) {
+  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
   u32 old_size = table->size();
   auto delta = Pop<u32>();
   auto ref = Pop<Ref>();
@@ -1143,19 +1140,17 @@ RunResult Thread::DoTableGrow(Store& store,
   return RunResult::Ok;
 }
 
-RunResult Thread::DoTableSize(Store& store,
-                              RefPtr<Instance>& inst,
-                              Instr instr) {
-  RefPtr<Table> table{store, inst->tables()[instr.imm_u32]};
+RunResult Thread::DoTableSize(Store& store, Instance::Ptr& inst, Instr instr) {
+  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
   Push<u32>(table->size());
   return RunResult::Ok;
 }
 
 RunResult Thread::DoTableFill(Store& store,
-                              RefPtr<Instance>& inst,
+                              Instance::Ptr& inst,
                               Instr instr,
-                              RefPtr<Trap>* out_trap) {
-  RefPtr<Table> table{store, inst->tables()[instr.imm_u32]};
+                              Trap::Ptr* out_trap) {
+  Table::Ptr table{store, inst->tables()[instr.imm_u32]};
   auto size = Pop<u32>();
   auto value = Pop<Ref>();
   auto dst = Pop<u32>();
@@ -1285,9 +1280,9 @@ T FloatMax(T lhs, T rhs) {
 }
 
 RunResult Thread::StepInternal(Store& store,
-                               RefPtr<Instance>& inst,
-                               RefPtr<Module>& mod,
-                               RefPtr<Trap>* out_trap) {
+                               Instance::Ptr& inst,
+                               Module::Ptr& mod,
+                               Trap::Ptr* out_trap) {
   u32& pc = frames_.back().offset;
   auto instr = mod->desc().istream.Read(&pc);
   switch (instr.op) {
@@ -1318,20 +1313,20 @@ RunResult Thread::StepInternal(Store& store,
 
     case Opcode::Call: {
       Ref new_func_ref = inst->funcs()[instr.imm_u32];
-      RefPtr<DefinedFunc> new_func{store, new_func_ref};
+      DefinedFunc::Ptr new_func{store, new_func_ref};
       PushCall(new_func_ref, new_func->desc().code_offset);
       break;
     }
 
     case Opcode::CallIndirect:
     case Opcode::ReturnCallIndirect: {
-      RefPtr<Table> table{store, inst->tables()[instr.imm_u32x2.fst]};
+      Table::Ptr table{store, inst->tables()[instr.imm_u32x2.fst]};
       auto&& func_type = mod->desc().func_types[instr.imm_u32x2.snd];
       auto entry = Pop<u32>();
       TRAP_IF(entry >= table->elements().size(), "undefined table index");
       auto new_func_ref = table->elements()[entry];
       TRAP_IF(new_func_ref == Ref::Null, "uninitialized table element");
-      RefPtr<Func> new_func{store, new_func_ref};
+      Func::Ptr new_func{store, new_func_ref};
       TRAP_IF(Failed(Match(new_func->func_type(), func_type, nullptr)),
               "call indirect func type mismatch");
       if (instr.op == Opcode::ReturnCallIndirect) {
@@ -1368,13 +1363,13 @@ RunResult Thread::StepInternal(Store& store,
       break;
 
     case Opcode::GlobalGet: {
-      RefPtr<Global> global{store, inst->globals()[instr.imm_u32]};
+      Global::Ptr global{store, inst->globals()[instr.imm_u32]};
       Push(global->Get());
       break;
     }
 
     case Opcode::GlobalSet: {
-      RefPtr<Global> global{store, inst->globals()[instr.imm_u32]};
+      Global::Ptr global{store, inst->globals()[instr.imm_u32]};
       global->UnsafeSet(Pop());
       break;
     }
@@ -1405,13 +1400,13 @@ RunResult Thread::StepInternal(Store& store,
     case Opcode::I64Store32: return DoStore<u32, u64>(store, inst, instr, out_trap);
 
     case Opcode::MemorySize: {
-      RefPtr<Memory> memory{store, inst->memories()[instr.imm_u32]};
+      Memory::Ptr memory{store, inst->memories()[instr.imm_u32]};
       Push(memory->PageSize());
       break;
     }
 
     case Opcode::MemoryGrow: {
-      RefPtr<Memory> memory{store, inst->memories()[instr.imm_u32]};
+      Memory::Ptr memory{store, inst->memories()[instr.imm_u32]};
       u32 old_size = memory->PageSize();
       if (Failed(memory->Grow(Pop<u32>()))) {
         Push<s32>(-1);
@@ -1583,7 +1578,7 @@ RunResult Thread::StepInternal(Store& store,
 
     case Opcode::InterpCallHost: {
       Ref new_func_ref = inst->funcs()[instr.imm_u32];
-      RefPtr<Func> new_func{store, new_func_ref};
+      Func::Ptr new_func{store, new_func_ref};
       return DoCall(new_func, out_trap);
     }
 

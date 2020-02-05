@@ -342,7 +342,7 @@ inline TypedValue::TypedValue(ValueType type, Value value)
 inline TypedValue::TypedValue(Store& store, ValueType type, Value value)
     : type(type), value(value) {
   if (IsReference(type)) {
-    ref = RefPtr<Object>(store, value.ref_);
+    ref = Object::Ptr(store, value.ref_);
   }
 }
 
@@ -369,7 +369,7 @@ inline bool Foreign::classof(const Object* obj) {
 }
 
 // static
-inline RefPtr<Foreign> Foreign::New(Store& store, void* ptr) {
+inline Foreign::Ptr Foreign::New(Store& store, void* ptr) {
   return store.Alloc<Foreign>(store, ptr);
 }
 
@@ -384,9 +384,9 @@ inline bool Trap::classof(const Object* obj) {
 }
 
 // static
-inline RefPtr<Trap> Trap::New(Store& store,
-                              const std::string& msg,
-                              const std::vector<Frame>& trace) {
+inline Trap::Ptr Trap::New(Store& store,
+                           const std::string& msg,
+                           const std::vector<Frame>& trace) {
   return store.Alloc<Trap>(store, msg, trace);
 }
 
@@ -435,9 +435,9 @@ inline bool DefinedFunc::classof(const Object* obj) {
 }
 
 // static
-inline RefPtr<DefinedFunc> DefinedFunc::New(Store& store,
-                                            Ref instance,
-                                            FuncDesc desc) {
+inline DefinedFunc::Ptr DefinedFunc::New(Store& store,
+                                         Ref instance,
+                                         FuncDesc desc) {
   return store.Alloc<DefinedFunc>(store, instance, desc);
 }
 
@@ -456,10 +456,10 @@ inline bool HostFunc::classof(const Object* obj) {
 }
 
 // static
-inline RefPtr<HostFunc> HostFunc::New(Store& store,
-                                      FuncType type,
-                                      Callback cb,
-                                      void* user_data) {
+inline HostFunc::Ptr HostFunc::New(Store& store,
+                                   FuncType type,
+                                   Callback cb,
+                                   void* user_data) {
   return store.Alloc<HostFunc>(store, type, cb, user_data);
 }
 
@@ -470,7 +470,7 @@ inline bool Table::classof(const Object* obj) {
 }
 
 // static
-inline RefPtr<Table> Table::New(Store& store, TableDesc desc) {
+inline Table::Ptr Table::New(Store& store, TableDesc desc) {
   return store.Alloc<Table>(store, desc);
 }
 
@@ -493,7 +493,7 @@ inline bool Memory::classof(const Object* obj) {
 }
 
 // static
-inline RefPtr<Memory> Memory::New(interp2::Store& store, MemoryDesc desc) {
+inline Memory::Ptr Memory::New(interp2::Store& store, MemoryDesc desc) {
   return store.Alloc<Memory>(store, desc);
 }
 
@@ -544,7 +544,7 @@ inline bool Global::classof(const Object* obj) {
 }
 
 // static
-inline RefPtr<Global> Global::New(Store& store, GlobalDesc desc, Value value) {
+inline Global::Ptr Global::New(Store& store, GlobalDesc desc, Value value) {
   return store.Alloc<Global>(store, desc, value);
 }
 
@@ -583,7 +583,7 @@ inline bool Event::classof(const Object* obj) {
 }
 
 // static
-inline RefPtr<Event> Event::New(Store& store, EventDesc desc) {
+inline Event::Ptr Event::New(Store& store, EventDesc desc) {
   return store.Alloc<Event>(store, desc);
 }
 
@@ -624,7 +624,7 @@ inline bool Module::classof(const Object* obj) {
 }
 
 // static
-inline RefPtr<Module> Module::New(Store& store, ModuleDesc desc) {
+inline Module::Ptr Module::New(Store& store, ModuleDesc desc) {
   return store.Alloc<Module>(store, std::move(desc));
 }
 
@@ -701,7 +701,7 @@ inline bool Thread::classof(const Object* obj) {
 }
 
 // static
-inline RefPtr<Thread> Thread::New(Store& store, const Options& options) {
+inline Thread::Ptr Thread::New(Store& store, const Options& options) {
   return store.Alloc<Thread>(store, options);
 }
 
