@@ -319,6 +319,11 @@ Result Store::Get(Ref ref, RefPtr<T>* out) {
   return Result::Error;
 }
 
+template <typename T>
+RefPtr<T> Store::UnsafeGet(Ref ref) {
+  return RefPtr<T>(*this, ref);
+}
+
 template <typename T, typename... Args>
 RefPtr<T> Store::Alloc(Args&&... args) {
   Ref ref{objects.New(new T(std::forward<Args>(args)...))};
@@ -353,6 +358,10 @@ inline ObjectKind Object::kind() const {
   return kind_;
 }
 
+inline Ref Object::self() const {
+  return self_;
+}
+
 //// Foreign ////
 // static
 inline bool Foreign::classof(const Object* obj) {
@@ -379,6 +388,10 @@ inline RefPtr<Trap> Trap::New(Store& store,
                               const std::string& msg,
                               const std::vector<Frame>& trace) {
   return store.Alloc<Trap>(store, msg, trace);
+}
+
+inline std::string Trap::message() const {
+  return message_;
 }
 
 //// Extern ////
@@ -428,6 +441,14 @@ inline RefPtr<DefinedFunc> DefinedFunc::New(Store& store,
   return store.Alloc<DefinedFunc>(store, instance, desc);
 }
 
+inline Ref DefinedFunc::instance() const {
+  return instance_;
+}
+
+inline const FuncDesc& DefinedFunc::desc() const {
+  return desc_;
+}
+
 //// HostFunc ////
 // static
 inline bool HostFunc::classof(const Object* obj) {
@@ -451,6 +472,14 @@ inline bool Table::classof(const Object* obj) {
 // static
 inline RefPtr<Table> Table::New(Store& store, TableDesc desc) {
   return store.Alloc<Table>(store, desc);
+}
+
+inline const TableDesc& Table::desc() const {
+  return desc_;
+}
+
+inline const RefVec& Table::elements() const {
+  return elements_;
 }
 
 //// Memory ////
@@ -494,6 +523,14 @@ Result Memory::Store(u32 offset, u32 addend, T val) {
     return Result::Ok;
   }
   return Result::Error;
+}
+
+inline u32 Memory::ByteSize() const {
+  return data_.size();
+}
+
+inline u32 Memory::PageSize() const {
+  return pages_;
 }
 
 //// Global ////

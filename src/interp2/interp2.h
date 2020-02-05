@@ -352,6 +352,8 @@ class Store {
   RefPtr<T> Alloc(Args&&...);
   template <typename T>
   Result Get(Ref, RefPtr<T>* out);
+  template <typename T>
+  RefPtr<T> UnsafeGet(Ref);
 
   RootList::Index NewRoot(Ref);
   RootList::Index CopyRoot(RootList::Index);
@@ -440,6 +442,7 @@ class Object {
   virtual ~Object();
 
   ObjectKind kind() const;
+  Ref self() const;
 
  protected:
   friend Store;
@@ -478,6 +481,8 @@ class Trap : public Object {
       Store&,
       const std::string& msg,
       const std::vector<Frame>& trace = std::vector<Frame>());
+
+  std::string message() const;
 
  private:
   friend Store;
@@ -537,6 +542,9 @@ class DefinedFunc : public Func {
               const TypedValues& params,
               TypedValues* out_results,
               RefPtr<Trap>* out_trap) override;
+
+  Ref instance() const;
+  const FuncDesc& desc() const;
 
  private:
   friend Store;
@@ -604,6 +612,9 @@ class Table : public Extern {
   // Unsafe API.
   Ref UnsafeGet(u32 offset) const;
 
+  const TableDesc& desc() const;
+  const RefVec& elements() const;
+
  private:
   friend Store;
   explicit Table(Store&, TableDesc);
@@ -637,6 +648,9 @@ class Memory : public Extern {
                      u32 src_offset,
                      u32 size);
 
+  u32 ByteSize() const;
+  u32 PageSize() const;
+
   // Unsafe API.
   template <typename T>
   T UnsafeLoad(u32 offset, u32 addend) const;
@@ -669,6 +683,7 @@ class Global : public Extern {
 
   template <typename T>
   T UnsafeGet() const;
+  void UnsafeSet(Value);
 
  private:
   friend Store;

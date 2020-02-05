@@ -541,6 +541,10 @@ Result Global::Set(Store& store, Ref ref) {
   return Result::Error;
 }
 
+void Global::UnsafeSet(Value value) {
+  value_ = value;
+}
+
 //// Event ////
 Event::Event(Store&, EventDesc desc) : Extern(skind), desc_(desc) {}
 
