@@ -991,7 +991,7 @@ class Thread : public Object {
 
   std::vector<Frame> frames_;
   std::vector<Value> values_;
-  std::vector<bool> refs_; // TODO: use vector of index into values_ instead
+  std::vector<u32> refs_;  // Index into values_.
 
   // Cached for convenience.
   Store& store_;

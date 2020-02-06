@@ -784,24 +784,23 @@ Thread::Thread(Store& store, const Options& options)
     : Object(skind), store_(store) {
   frames_.reserve(options.call_stack_size);
   values_.reserve(options.value_stack_size);
-  refs_.reserve(options.value_stack_size);
 }
 
 void Thread::Mark(Store& store) {
   for (auto&& frame : frames_) {
     frame.Mark(store);
   }
-  for (u32 i = 0; i < refs_.size(); ++i) {
-    if (refs_[i]) {
-      store.Mark(values_[i].ref_);
-    }
+  for (auto index: refs_) {
+    store.Mark(values_[index].ref_);
   }
 }
 
 void Thread::PushValues(const TypedValues& values) {
   for (auto&& value: values) {
+    if (IsReference(value.type)) {
+      refs_.push_back(values_.size());
+    }
     values_.push_back(value.value);
-    refs_.push_back(IsReference(value.type));
   }
 }
 
@@ -871,7 +870,9 @@ T Thread::Pop() {
 }
 
 Value Thread::Pop() {
-  refs_.pop_back();
+  if (!refs_.empty() && refs_.back() >= values_.size()) {
+    refs_.pop_back();
+  }
   auto value = values_.back();
   values_.pop_back();
   return value;
@@ -889,12 +890,11 @@ void Thread::Push<bool>(bool value) {
 
 void Thread::Push(Value value) {
   values_.push_back(value);
-  refs_.push_back(false);
 }
 
 void Thread::Push(Ref ref) {
+  refs_.push_back(values_.size());
   values_.push_back(Value(ref));
-  refs_.push_back(true);
 }
 
 #define TRAP(msg) *out_trap = Trap::New(store_, (msg), frames_), RunResult::Trap
@@ -973,6 +973,7 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
     }
 
     case O::LocalGet:
+      // TODO: need to mark whether this is a ref.
       Push(Pick(instr.imm_u32));
       break;
 
@@ -987,6 +988,7 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
       break;
 
     case O::GlobalGet: {
+      // TODO: need to mark whether this is a ref.
       Global::Ptr global{store_, inst_->globals()[instr.imm_u32]};
       Push(global->Get());
       break;
@@ -1191,7 +1193,9 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
 
     case O::InterpAlloca:
       values_.resize(values_.size() + instr.imm_u32);
-      refs_.resize(refs_.size() + instr.imm_u32);
+      // refs_ doesn't need to be updated; We may be allocating space for
+      // references, but they will be initialized to null, so it is OK if we
+      // don't mark them.
       break;
 
     case O::InterpBrUnless:
@@ -1209,10 +1213,16 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
     case O::InterpDropKeep: {
       auto drop = instr.imm_u32x2.fst;
       auto keep = instr.imm_u32x2.snd;
+      // Shift kept refs down.
+      for (auto iter = refs_.rbegin(); iter != refs_.rend(); ++iter) {
+        if (*iter >= values_.size() - keep) {
+          *iter -= drop;
+        } else {
+          break;
+        }
+      }
       std::move(values_.end() - keep, values_.end(), values_.end() - drop - keep);
-      std::move(refs_.end() - keep, refs_.end(), refs_.end() - drop - keep);
       values_.resize(values_.size() - drop);
-      refs_.resize(refs_.size() - drop);
       break;
     }
 
@@ -1240,7 +1250,7 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
     case O::TableFill: return DoTableFill(instr, out_trap);
 
     case O::RefNull:
-      Push<Ref>(Ref::Null);
+      Push(Ref::Null);
       break;
 
     case O::RefIsNull:
