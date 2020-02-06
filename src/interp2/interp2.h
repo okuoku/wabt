@@ -560,7 +560,8 @@ class Func : public Extern {
   virtual Result Call(Store&,
                       const TypedValues& params,
                       TypedValues* out_results,
-                      Trap::Ptr* out_trap) = 0;
+                      Trap::Ptr* out_trap,
+                      Stream* = nullptr) = 0;
 
   const FuncType& func_type();
 
@@ -583,7 +584,8 @@ class DefinedFunc : public Func {
   Result Call(Store&,
               const TypedValues& params,
               TypedValues* out_results,
-              Trap::Ptr* out_trap) override;
+              Trap::Ptr* out_trap,
+              Stream* = nullptr) override;
 
   Ref instance() const;
   const FuncDesc& desc() const;
@@ -615,7 +617,8 @@ class HostFunc : public Func {
   Result Call(Store&,
               const TypedValues& params,
               TypedValues* out_results,
-              Trap::Ptr* out_trap) override;
+              Trap::Ptr* out_trap,
+              Stream* = nullptr) override;
 
  private:
   friend Store;
@@ -882,6 +885,7 @@ class Thread : public Object {
 
     u32 value_stack_size = kDefaultValueStackSize;
     u32 call_stack_size = kDefaultCallStackSize;
+    Stream* trace_stream = nullptr;
   };
 
   static Thread::Ptr New(Store&, const Options&);
@@ -893,6 +897,8 @@ class Thread : public Object {
  private:
   friend Store;
   friend DefinedFunc;
+
+  struct TraceSource;
 
   explicit Thread(Store&, const Options&);
   void Mark(Store&) override;
@@ -997,6 +1003,23 @@ class Thread : public Object {
   Store& store_;
   Instance::Ptr inst_;
   Module::Ptr mod_;
+
+  // Tracing.
+  Stream* trace_stream_;
+  TraceSource* trace_source_;
+};
+
+struct Thread::TraceSource : Istream::TraceSource {
+ public:
+  explicit TraceSource(Thread*);
+  virtual std::string Pick(Index, Instr);
+
+ private:
+  ValueType GetLocalType(Index);
+  ValueType GetGlobalType(Index);
+  ValueType GetTableElementType(Index);
+
+  Thread* thread_;
 };
 
 }  // namespace interp2

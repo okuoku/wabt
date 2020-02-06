@@ -305,8 +305,12 @@ Result DefinedFunc::Match(Store& store,
 Result DefinedFunc::Call(Store& store,
                          const TypedValues& params,
                          TypedValues* out_results,
-                         Trap::Ptr* out_trap) {
-  Thread::Ptr thread = Thread::New(store, Thread::Options());
+                         Trap::Ptr* out_trap,
+                         Stream* trace_stream) {
+  Thread::Options options;
+  options.trace_stream = trace_stream;
+
+  Thread::Ptr thread = Thread::New(store, options);
   assert(params.size() == type_.params.size());
   thread->PushValues(params);
   thread->PushCall(self_, desc_.code_offset);
@@ -333,7 +337,8 @@ Result HostFunc::Match(Store& store,
 Result HostFunc::Call(Store& store,
                       const TypedValues& params,
                       TypedValues* out_results,
-                      Trap::Ptr* out_trap) {
+                      Trap::Ptr* out_trap,
+                      Stream*) {
   std::string msg;
   Result result = callback_(params, out_results, &msg, user_data_);
   if (Failed(result)) {
@@ -784,6 +789,10 @@ Thread::Thread(Store& store, const Options& options)
     : Object(skind), store_(store) {
   frames_.reserve(options.call_stack_size);
   values_.reserve(options.value_stack_size);
+  if (options.trace_stream) {
+    trace_stream_ = options.trace_stream;
+    trace_source_ = new TraceSource(this);
+  }
 }
 
 void Thread::Mark(Store& store) {
@@ -908,7 +917,13 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
   using O = Opcode;
 
   u32& pc = frames_.back().offset;
-  auto instr = mod_->desc().istream.Read(&pc);
+  auto& istream = mod_->desc().istream;
+
+  if (trace_stream_) {
+    istream.Trace(trace_stream_, pc, trace_source_);
+  }
+
+  auto instr = istream.Read(&pc);
   switch (instr.op) {
     case O::Unreachable:
       return TRAP("unreachable executed");
@@ -1827,6 +1842,66 @@ RunResult Thread::DoSimdLoadExtend(Instr instr, Trap::Ptr* out_trap) {
   }
   Push(result);
   return RunResult::Ok;
+}
+
+Thread::TraceSource::TraceSource(Thread* thread) : thread_(thread) {}
+
+std::string Thread::TraceSource::Pick(Index index, Instr instr) {
+  Value val = thread_->Pick(index);
+  const char* reftype;
+  auto type = instr.op.GetParamType(index);
+  if (type == ValueType::Void) {
+    // Void should never be displayed normally; we only expect to see it when
+    // the stack may have different a different type. This is likely to occur
+    // with an index; try to see which type we should expect.
+    switch (instr.op) {
+      case Opcode::GlobalSet: type = GetGlobalType(instr.imm_u32); break;
+      case Opcode::LocalSet:
+      case Opcode::LocalTee:  type = GetLocalType(instr.imm_u32); break;
+      case Opcode::TableSet:
+      case Opcode::TableGrow:
+      case Opcode::TableFill: type = GetTableElementType(instr.imm_u32); break;
+      default: return "?";
+    }
+  }
+
+  switch (type) {
+    case ValueType::I32: return StringPrintf("%u", val.Get<u32>());
+    case ValueType::I64: return StringPrintf("%" PRIu64, val.Get<u64>());
+    case ValueType::F32: return StringPrintf("%g", val.Get<f32>());
+    case ValueType::F64: return StringPrintf("%g", val.Get<f64>());
+    case ValueType::V128: {
+      auto v = val.Get<v128>();
+      return StringPrintf("0x%08x 0x%08x 0x%08x 0x%08x", v.v[0], v.v[1], v.v[2],
+                          v.v[3]);
+    }
+
+    case ValueType::Nullref: reftype = "nullref"; break;
+    case ValueType::Funcref: reftype = "funcref"; break;
+    case ValueType::Exnref:  reftype = "exnref"; break;
+    case ValueType::Anyref:  reftype = "anyref"; break;
+
+    default:
+      WABT_UNREACHABLE;
+      break;
+  }
+
+  // Handle ref types.
+  return StringPrintf("%s:%" PRIzd, reftype, val.Get<Ref>().index);
+}
+
+ValueType Thread::TraceSource::GetLocalType(Index index) {
+  // TODO: need to store information about locals in FuncDesc.
+  DefinedFunc::Ptr func{thread_->store_, thread_->frames_.back().func};
+  return ValueType::I32;
+}
+
+ValueType Thread::TraceSource::GetGlobalType(Index index) {
+  return thread_->mod_->desc().globals[index].type.type;
+}
+
+ValueType Thread::TraceSource::GetTableElementType(Index index) {
+  return thread_->mod_->desc().tables[index].type.element;
 }
 
 }  // namespace interp2

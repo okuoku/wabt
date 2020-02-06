@@ -102,18 +102,18 @@ struct Istream {
   // TODO separate out disassembly/tracing?
   struct TraceSource {
     virtual ~TraceSource() {}
-    virtual std::string Pick(Index, ValueType) = 0;
+    virtual std::string Pick(Index, Instr) = 0;
   };
 
   struct DisassemblySource : TraceSource {
-    std::string Pick(Index, ValueType) override;
+    std::string Pick(Index, Instr) override;
   };
 
-  void Disassemble(Stream*);
-  Offset Disassemble(Stream*, Offset);
-  void Disassemble(Stream*, Offset from, Offset to);
+  void Disassemble(Stream*) const;
+  Offset Disassemble(Stream*, Offset) const;
+  void Disassemble(Stream*, Offset from, Offset to) const;
 
-  Offset Trace(Stream*, Offset, TraceSource*);
+  Offset Trace(Stream*, Offset, TraceSource*) const;
 
 private:
   template <typename T>

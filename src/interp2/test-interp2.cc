@@ -89,44 +89,50 @@ TEST(ReadModule, MVP) {
   EXPECT_EQ(1u, module.datas.size());
 }
 
-TEST(ReadModule, Disassemble) {
-  // (func $fac (param $n i32) (result i32)
-  //   (local $result i32)
-  //   (local.set $result (i32.const 1))
-  //   (loop (result i32)
-  //     (local.set $result
-  //       (i32.mul
-  //         (br_if 1 (local.get $result) (i32.eqz (local.get $n)))
-  //         (local.get $n)))
-  //     (local.set $n (i32.sub (local.get $n) (i32.const 1)))
-  //     (br 0)))
-  std::vector<u8> data = {
-      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60,
-      0x01, 0x7f, 0x01, 0x7f, 0x03, 0x02, 0x01, 0x00, 0x0a, 0x22, 0x01, 0x20,
-      0x01, 0x01, 0x7f, 0x41, 0x01, 0x21, 0x01, 0x03, 0x7f, 0x20, 0x01, 0x20,
-      0x00, 0x45, 0x0d, 0x01, 0x20, 0x00, 0x6c, 0x21, 0x01, 0x20, 0x00, 0x41,
-      0x01, 0x6b, 0x21, 0x00, 0x0c, 0x00, 0x0b, 0x0b,
-  };
+namespace {
 
+// (func (export "fac") (param $n i32) (result i32)
+//   (local $result i32)
+//   (local.set $result (i32.const 1))
+//   (loop (result i32)
+//     (local.set $result
+//       (i32.mul
+//         (br_if 1 (local.get $result) (i32.eqz (local.get $n)))
+//         (local.get $n)))
+//     (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+//     (br 0)))
+const std::vector<u8> s_fac_module = {
+    0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01,
+    0x60, 0x01, 0x7f, 0x01, 0x7f, 0x03, 0x02, 0x01, 0x00, 0x07, 0x07,
+    0x01, 0x03, 0x66, 0x61, 0x63, 0x00, 0x00, 0x0a, 0x22, 0x01, 0x20,
+    0x01, 0x01, 0x7f, 0x41, 0x01, 0x21, 0x01, 0x03, 0x7f, 0x20, 0x01,
+    0x20, 0x00, 0x45, 0x0d, 0x01, 0x20, 0x00, 0x6c, 0x21, 0x01, 0x20,
+    0x00, 0x41, 0x01, 0x6b, 0x21, 0x00, 0x0c, 0x00, 0x0b, 0x0b,
+};
+
+void ExpectBufferStrEq(OutputBuffer& buf, const char* str) {
+  char buf_str[buf.size() + 1];
+  memcpy(buf_str, buf.data.data(), sizeof(buf_str));
+  buf_str[buf.size()] = 0;
+  EXPECT_STREQ(buf_str, str);
+}
+
+}  // namespace
+
+TEST(ReadModule, Disassemble) {
   Errors errors;
   ReadBinaryOptions options;
   ModuleDesc module;
-  Result result =
-      ReadModule(data.data(), data.size(), options, &errors, &module);
+  Result result = ReadModule(s_fac_module.data(), s_fac_module.size(), options,
+                             &errors, &module);
   ASSERT_EQ(Result::Ok, result)
       << FormatErrorsToString(errors, Location::Type::Binary);
 
   MemoryStream stream;
   module.istream.Disassemble(&stream);
-
-  const size_t expected_size = 367;
   auto buf = stream.ReleaseOutputBuffer();
-  ASSERT_EQ(expected_size, buf->size());
 
-  char str[expected_size];
-  memcpy(str, buf->data.data(), sizeof(str));
-
-  EXPECT_STREQ(str,
+  ExpectBufferStrEq(*buf,
 R"(   0| alloca 1
    6| i32.const 1
   12| local.set $1, %[-1]
@@ -149,20 +155,11 @@ R"(   0| alloca 1
 }
 
 TEST(Interp, Fac) {
-  std::vector<u8> data = {
-      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01,
-      0x60, 0x01, 0x7f, 0x01, 0x7f, 0x03, 0x02, 0x01, 0x00, 0x07, 0x07,
-      0x01, 0x03, 0x66, 0x61, 0x63, 0x00, 0x00, 0x0a, 0x22, 0x01, 0x20,
-      0x01, 0x01, 0x7f, 0x41, 0x01, 0x21, 0x01, 0x03, 0x7f, 0x20, 0x01,
-      0x20, 0x00, 0x45, 0x0d, 0x01, 0x20, 0x00, 0x6c, 0x21, 0x01, 0x20,
-      0x00, 0x41, 0x01, 0x6b, 0x21, 0x00, 0x0c, 0x00, 0x0b, 0x0b,
-  };
-
   Errors errors;
   ReadBinaryOptions options;
   ModuleDesc module;
-  Result result =
-      ReadModule(data.data(), data.size(), options, &errors, &module);
+  Result result = ReadModule(s_fac_module.data(), s_fac_module.size(), options,
+                             &errors, &module);
   ASSERT_EQ(Result::Ok, result)
       << FormatErrorsToString(errors, Location::Type::Binary);
 
@@ -178,7 +175,71 @@ TEST(Interp, Fac) {
   result = func->Call(store, {TypedValue(ValueType::I32, Value(s32(5)))},
                       &results, &trap);
 
-  ASSERT_EQ(1u, results.size());
-  ASSERT_EQ(ValueType::I32, results[0].type);
-  ASSERT_EQ(120u, results[0].value.Get<u32>());
+  ASSERT_EQ(Result::Ok, result);
+  EXPECT_EQ(1u, results.size());
+  EXPECT_EQ(ValueType::I32, results[0].type);
+  EXPECT_EQ(120u, results[0].value.Get<u32>());
+}
+
+TEST(Interp, Fac_Trace) {
+  Errors errors;
+  ReadBinaryOptions options;
+  ModuleDesc module;
+  Result result = ReadModule(s_fac_module.data(), s_fac_module.size(), options,
+                             &errors, &module);
+  ASSERT_EQ(Result::Ok, result)
+      << FormatErrorsToString(errors, Location::Type::Binary);
+
+  Store store;
+  auto mod = Module::New(store, module);
+  RefPtr<Trap> trap;
+  auto inst = Instance::Instantiate(store, mod.ref(), {}, &trap);
+  ASSERT_TRUE(inst) << trap->message();
+
+  ASSERT_EQ(1u, inst->exports().size());
+  RefPtr<DefinedFunc> func{store, inst->exports()[0]};
+
+  MemoryStream stream;
+  TypedValues results;
+  result = func->Call(store, {TypedValue(ValueType::I32, Value(s32(2)))},
+                      &results, &trap, &stream);
+  ASSERT_EQ(Result::Ok, result);
+
+  auto buf = stream.ReleaseOutputBuffer();
+  ExpectBufferStrEq(*buf,
+R"(   0| alloca 1
+   6| i32.const 1
+  12| local.set $1, 1
+  18| local.get $1
+  24| local.get $3
+  30| i32.eqz 2
+  32| br_unless @44, 0
+  44| local.get $3
+  50| i32.mul 1, 2
+  52| local.set $1, 2
+  58| local.get $2
+  64| i32.const 1
+  70| i32.sub 2, 1
+  72| local.set $2, 1
+  78| br @18
+  18| local.get $1
+  24| local.get $3
+  30| i32.eqz 1
+  32| br_unless @44, 0
+  44| local.get $3
+  50| i32.mul 2, 1
+  52| local.set $1, 2
+  58| local.get $2
+  64| i32.const 1
+  70| i32.sub 1, 1
+  72| local.set $2, 0
+  78| br @18
+  18| local.get $1
+  24| local.get $3
+  30| i32.eqz 0
+  32| br_unless @44, 1
+  38| br @84
+  84| drop_keep $2 $1
+  94| return
+)");
 }

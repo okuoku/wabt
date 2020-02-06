@@ -675,20 +675,20 @@ Instr Istream::Read(Offset* offset) const {
   return instr;
 }
 
-void Istream::Disassemble(Stream* stream) {
+void Istream::Disassemble(Stream* stream) const {
   Disassemble(stream, 0, data_.size());
 }
 
-std::string Istream::DisassemblySource::Pick(Index index, ValueType type) {
+std::string Istream::DisassemblySource::Pick(Index index, Instr instr) {
   return StringPrintf("%%[-%d]", index);
 }
 
-Istream::Offset Istream::Disassemble(Stream* stream, Offset offset) {
+Istream::Offset Istream::Disassemble(Stream* stream, Offset offset) const {
   DisassemblySource source;
   return Trace(stream, offset, &source);
 }
 
-void Istream::Disassemble(Stream* stream, Offset from, Offset to) {
+void Istream::Disassemble(Stream* stream, Offset from, Offset to) const {
   DisassemblySource source;
   assert(from <= data_.size() && to <= data_.size() && from <= to);
 
@@ -700,7 +700,7 @@ void Istream::Disassemble(Stream* stream, Offset from, Offset to) {
 
 Istream::Offset Istream::Trace(Stream* stream,
                                Offset offset,
-                               TraceSource* source) {
+                               TraceSource* source) const {
   Offset start = offset;
   Instr instr = Read(&offset);
   stream->Writef("%4u| %s", start, instr.op.GetName());
@@ -711,21 +711,18 @@ Istream::Offset Istream::Trace(Stream* stream,
       break;
 
     case InstrKind::Imm_0_Op_1:
-      stream->Writef(" %s\n",
-                     source->Pick(1, instr.op.GetParamType1()).c_str());
+      stream->Writef(" %s\n", source->Pick(1, instr).c_str());
       break;
 
     case InstrKind::Imm_0_Op_2:
-      stream->Writef(" %s, %s\n",
-                     source->Pick(2, instr.op.GetParamType2()).c_str(),
-                     source->Pick(1, instr.op.GetParamType1()).c_str());
+      stream->Writef(" %s, %s\n", source->Pick(2, instr).c_str(),
+                     source->Pick(1, instr).c_str());
       break;
 
     case InstrKind::Imm_0_Op_3:
-      stream->Writef(" %s, %s, %s\n",
-                     source->Pick(3, instr.op.GetParamType3()).c_str(),
-                     source->Pick(2, instr.op.GetParamType2()).c_str(),
-                     source->Pick(1, instr.op.GetParamType1()).c_str());
+      stream->Writef(" %s, %s, %s\n", source->Pick(3, instr).c_str(),
+                     source->Pick(2, instr).c_str(),
+                     source->Pick(1, instr).c_str());
       break;
 
     case InstrKind::Imm_Jump_Op_0:
@@ -734,7 +731,7 @@ Istream::Offset Istream::Trace(Stream* stream,
 
     case InstrKind::Imm_Jump_Op_1:
       stream->Writef(" @%u, %s\n", instr.imm_u32,
-                     source->Pick(1, instr.op.GetParamType1()).c_str());
+                     source->Pick(1, instr).c_str());
       break;
 
     case InstrKind::Imm_Index_Op_0:
@@ -743,20 +740,19 @@ Istream::Offset Istream::Trace(Stream* stream,
 
     case InstrKind::Imm_Index_Op_1:
       stream->Writef(" $%u, %s\n", instr.imm_u32,
-                     source->Pick(1, instr.op.GetParamType1()).c_str());
+                     source->Pick(1, instr).c_str());
       break;
 
     case InstrKind::Imm_Index_Op_2:
       stream->Writef(" $%u, %s, %s\n", instr.imm_u32,
-                     source->Pick(2, instr.op.GetParamType2()).c_str(),
-                     source->Pick(1, instr.op.GetParamType1()).c_str());
+                     source->Pick(2, instr).c_str(),
+                     source->Pick(1, instr).c_str());
       break;
 
     case InstrKind::Imm_Index_Op_3:
-      stream->Writef(" $%u, %s, %s, %s\n", instr.imm_u32,
-                     source->Pick(3, instr.op.GetParamType3()).c_str(),
-                     source->Pick(2, instr.op.GetParamType2()).c_str(),
-                     source->Pick(1, instr.op.GetParamType1()).c_str());
+      stream->Writef(
+          " $%u, %s, %s, %s\n", instr.imm_u32, source->Pick(3, instr).c_str(),
+          source->Pick(2, instr).c_str(), source->Pick(1, instr).c_str());
       break;
 
     case InstrKind::Imm_Index_Op_N:
@@ -765,10 +761,9 @@ Istream::Offset Istream::Trace(Stream* stream,
 
     case InstrKind::Imm_Index_Index_Op_3:
       stream->Writef(" $%u, $%u, %s, %s, %s\n", instr.imm_u32x2.fst,
-                     instr.imm_u32x2.snd,
-                     source->Pick(3, instr.op.GetParamType3()).c_str(),
-                     source->Pick(2, instr.op.GetParamType2()).c_str(),
-                     source->Pick(1, instr.op.GetParamType1()).c_str());
+                     instr.imm_u32x2.snd, source->Pick(3, instr).c_str(),
+                     source->Pick(2, instr).c_str(),
+                     source->Pick(1, instr).c_str());
       break;
 
     case InstrKind::Imm_Index_Index_Op_N:
@@ -778,23 +773,20 @@ Istream::Offset Istream::Trace(Stream* stream,
 
     case InstrKind::Imm_Index_Offset_Op_1:
       stream->Writef(" $%u:%s+$%u\n", instr.imm_u32x2.fst,
-                     source->Pick(1, instr.op.GetParamType1()).c_str(),
-                     instr.imm_u32x2.snd);
+                     source->Pick(1, instr).c_str(), instr.imm_u32x2.snd);
       break;
 
     case InstrKind::Imm_Index_Offset_Op_2:
       stream->Writef(" $%u:%s+$%u, %s\n", instr.imm_u32x2.fst,
-                     source->Pick(2, instr.op.GetParamType2()).c_str(),
-                     instr.imm_u32x2.snd,
-                     source->Pick(1, instr.op.GetParamType1()).c_str());
+                     source->Pick(2, instr).c_str(), instr.imm_u32x2.snd,
+                     source->Pick(1, instr).c_str());
       break;
 
     case InstrKind::Imm_Index_Offset_Op_3:
       stream->Writef(" $%u:%s+$%u, %s, %s\n", instr.imm_u32x2.fst,
-                     source->Pick(3, instr.op.GetParamType3()).c_str(),
-                     instr.imm_u32x2.snd,
-                     source->Pick(2, instr.op.GetParamType2()).c_str(),
-                     source->Pick(1, instr.op.GetParamType1()).c_str());
+                     source->Pick(3, instr).c_str(), instr.imm_u32x2.snd,
+                     source->Pick(2, instr).c_str(),
+                     source->Pick(1, instr).c_str());
       break;
 
     case InstrKind::Imm_I32_Op_0:
@@ -811,17 +803,15 @@ Istream::Offset Istream::Trace(Stream* stream,
 
     case InstrKind::Imm_I8_Op_1:
       // TODO: cleanup
-      stream->Writef(" %s : (Lane imm: %u)\n",
-                     source->Pick(1, instr.op.GetParamType1()).c_str(),
+      stream->Writef(" %s : (Lane imm: %u)\n", source->Pick(1, instr).c_str(),
                      instr.imm_u8);
       break;
 
     case InstrKind::Imm_I8_Op_2:
       // TODO: cleanup
       stream->Writef(" %s, %s : (Lane imm: $%u)\n",
-                     source->Pick(2, instr.op.GetParamType2()).c_str(),
-                     source->Pick(1, instr.op.GetParamType1()).c_str(),
-                     instr.imm_u8);
+                     source->Pick(2, instr).c_str(),
+                     source->Pick(1, instr).c_str(), instr.imm_u8);
       break;
 
     case InstrKind::Imm_V128_Op_0:
@@ -834,8 +824,7 @@ Istream::Offset Istream::Trace(Stream* stream,
       // TODO: cleanup
       stream->Writef(
           " %s, %s : (Lane imm: i32x4 0x%08x 0x%08x 0x%08x 0x%08x )\n",
-          source->Pick(2, instr.op.GetParamType2()).c_str(),
-          source->Pick(1, instr.op.GetParamType1()).c_str(),
+          source->Pick(2, instr).c_str(), source->Pick(1, instr).c_str(),
           instr.imm_v128.v[0], instr.imm_v128.v[1], instr.imm_v128.v[2],
           instr.imm_v128.v[3]);
       break;
