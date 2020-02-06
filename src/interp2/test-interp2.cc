@@ -19,6 +19,7 @@
 #include "src/binary-reader.h"
 #include "src/error-formatter.h"
 
+#include "src/interp2/interp2-math.h"
 #include "src/interp2/interp2.h"
 #include "src/interp2/istream.h"
 #include "src/interp2/read-module.h"
