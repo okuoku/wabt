@@ -143,6 +143,14 @@ using u64x2 = Simd<u64, 2>;
 using f32x4 = Simd<f32, 4>;
 using f64x2 = Simd<f64, 2>;
 
+// Used for load extend instructions.
+using s8x8 = Simd<s8, 8>;
+using u8x8 = Simd<u8, 8>;
+using s16x4 = Simd<s16, 4>;
+using u16x4 = Simd<u16, 4>;
+using s32x2 = Simd<s32, 2>;
+using u32x2 = Simd<u32, 2>;
+
 //// Types ////
 
 using Limits = wabt::Limits;
@@ -932,6 +940,8 @@ class Thread : public Object {
   RunResult DoReinterpret();
 
   template <typename T, typename V = T>
+  RunResult Load(Instr, V* out, Trap::Ptr* out_trap);
+  template <typename T, typename V = T>
   RunResult DoLoad(Instr, Trap::Ptr* out_trap);
   template <typename T, typename V = T>
   RunResult DoStore(Instr, Trap::Ptr* out_trap);
@@ -974,6 +984,8 @@ class Thread : public Object {
   RunResult DoSimdNarrow();
   template <typename S, typename T, bool low>
   RunResult DoSimdWiden();
+  template <typename S, typename T>
+  RunResult DoSimdLoadExtend(Instr, Trap::Ptr* out_trap);
 
   RunResult StepInternal(Trap::Ptr* out_trap);
 

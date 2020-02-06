@@ -1608,12 +1608,12 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
     case O::I32X4WidenLowI16X8U:  return DoSimdWiden<u32x4, u16x8, true>();
     case O::I32X4WidenHighI16X8U: return DoSimdWiden<u32x4, u16x8, false>();
 
-    case O::I16X8Load8X8S: /* TODO */ break;
-    case O::I16X8Load8X8U: /* TODO */ break;
-    case O::I32X4Load16X4S: /* TODO */ break;
-    case O::I32X4Load16X4U: /* TODO */ break;
-    case O::I64X2Load32X2S: /* TODO */ break;
-    case O::I64X2Load32X2U: /* TODO */ break;
+    case O::I16X8Load8X8S:  return DoSimdLoadExtend<s16x8, s8x8>(instr, out_trap);
+    case O::I16X8Load8X8U:  return DoSimdLoadExtend<u16x8, u8x8>(instr, out_trap);
+    case O::I32X4Load16X4S: return DoSimdLoadExtend<s32x4, s16x4>(instr, out_trap);
+    case O::I32X4Load16X4U: return DoSimdLoadExtend<u32x4, u16x4>(instr, out_trap);
+    case O::I64X2Load32X2S: return DoSimdLoadExtend<s64x2, s32x2>(instr, out_trap);
+    case O::I64X2Load32X2U: return DoSimdLoadExtend<s64x2, s32x2>(instr, out_trap);
 
     case O::V128Andnot: return DoSimdBinop<u64x2>(IntAndNot<u64>);
     case O::I8X16AvgrU: return DoSimdBinop<u8x16>(IntAvgr<u8>);
@@ -1656,13 +1656,21 @@ RunResult Thread::DoCall(const Func::Ptr& func, Trap::Ptr* out_trap) {
 }
 
 template <typename T, typename V>
-RunResult Thread::DoLoad(Instr instr, Trap::Ptr* out_trap) {
+RunResult Thread::Load(Instr instr, V* out, Trap::Ptr* out_trap) {
   Memory::Ptr memory{store_, inst_->memories()[instr.imm_u32x2.fst]};
   u32 offset = Pop<u32>();
-  V val;
-  TRAP_IF(Failed(memory->Load(offset, instr.imm_u32x2.snd, &val)),
+  TRAP_IF(Failed(memory->Load(offset, instr.imm_u32x2.snd, out)),
           StringPrintf("access at %u+%u >= max value %u", offset,
                        instr.imm_u32x2.snd, memory->ByteSize()));
+  return RunResult::Ok;
+}
+
+template <typename T, typename V>
+RunResult Thread::DoLoad(Instr instr, Trap::Ptr* out_trap) {
+  V val;
+  if (Load<V>(instr, &val, out_trap) != RunResult::Ok) {
+    return RunResult::Trap;
+  }
   Push(static_cast<T>(val));
   return RunResult::Ok;
 }
@@ -1921,10 +1929,14 @@ RunResult Thread::DoSimdShift(BinopFunc<R, T> f) {
 template <typename S, typename T>
 RunResult Thread::DoSimdLoadSplat(Instr instr, Trap::Ptr* out_trap) {
   using L = typename S::LaneType;
-  if (DoLoad<L>(instr, out_trap) != RunResult::Ok) {
+  L val;
+  if (Load<L>(instr, &val, out_trap) != RunResult::Ok) {
     return RunResult::Trap;
   }
-  return DoSimdSplat<S, T>();
+  S result;
+  std::fill(std::begin(result.v), std::end(result.v), val);
+  Push(result);
+  return RunResult::Ok;
 }
 
 RunResult Thread::DoSimdSwizzle() {
@@ -1972,14 +1984,24 @@ RunResult Thread::DoSimdNarrow() {
 
 template <typename S, typename T, bool low>
 RunResult Thread::DoSimdWiden() {
-  using SL = typename S::LaneType;
-  using TL = typename T::LaneType;
-  static_assert(std::is_signed<SL>::value == std::is_signed<TL>::value,
-                "Both lanes must be signed");
   auto val = Pop<T>();
   S result;
   for (u8 i = 0; i < S::lanes; ++i) {
     result.v[i] = val.v[(low ? 0 : S::lanes) + i];
+  }
+  Push(result);
+  return RunResult::Ok;
+}
+
+template <typename S, typename T>
+RunResult Thread::DoSimdLoadExtend(Instr instr, Trap::Ptr* out_trap) {
+  T val;
+  if (Load<T>(instr, &val, out_trap) != RunResult::Ok) {
+    return RunResult::Trap;
+  }
+  S result;
+  for (u8 i = 0; i < S::lanes; ++i) {
+    result.v[i] = val.v[i];
   }
   Push(result);
   return RunResult::Ok;
