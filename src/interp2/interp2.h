@@ -273,8 +273,25 @@ struct ImportDesc {
   ImportType type;
 };
 
+struct LocalDesc {
+  ValueType type;
+  u32 count;
+  // One past the last local index that has this type. For example, a vector of
+  // LocalDesc might look like:
+  //
+  //   {{I32, 2, 2}, {I64, 3, 5}, {F32, 1, 6}, ...}
+  //
+  // This makes it possible to use a binary search to find the type of a local
+  // at a given index.
+  u32 end;
+};
+
 struct FuncDesc {
+  u32 GetLocalCount() const;
+  ValueType GetLocalType(Index) const;
+
   FuncType type;
+  std::vector<LocalDesc> locals;
   u32 code_offset;
 };
 
@@ -342,12 +359,13 @@ struct ModuleDesc {
 //// Runtime ////
 
 struct Frame {
-  explicit Frame(Ref func, u32 offset);
+  explicit Frame(Ref func, u32 values, u32 offset);
 
   void Mark(Store&);
 
   Ref func;
-  u32 offset;
+  u32 values;  // Height of the value stack at this activation.
+  u32 offset;  // Istream offset; either the return PC, or the current PC.
 };
 
 template <typename T>
@@ -460,6 +478,12 @@ union Value {
 struct TypedValue {
   explicit TypedValue(ValueType, Value);
   explicit TypedValue(Store&, ValueType, Value);
+
+  static TypedValue MakeI32(u32);
+  static TypedValue MakeI64(u64);
+  static TypedValue MakeF32(f32);
+  static TypedValue MakeF64(f64);
+  static TypedValue MakeV128(v128);
 
   ValueType type;
   Value value;

@@ -114,7 +114,8 @@ inline ExportType& ExportType::operator=(const ExportType& other) {
 }
 
 //// Frame ////
-inline Frame::Frame(Ref func, u32 offset) : func(func), offset(offset) {}
+inline Frame::Frame(Ref func, u32 values, u32 offset)
+    : func(func), values(values), offset(offset) {}
 
 //// FreeList ////
 template <typename T>
@@ -362,6 +363,31 @@ inline TypedValue::TypedValue(Store& store, ValueType type, Value value)
   if (IsReference(type)) {
     ref = Object::Ptr(store, value.ref_);
   }
+}
+
+// static
+inline TypedValue TypedValue::MakeI32(u32 val) {
+  return TypedValue(ValueType::I32, Value(val));
+}
+
+// static
+inline TypedValue TypedValue::MakeI64(u64 val) {
+  return TypedValue(ValueType::I64, Value(val));
+}
+
+// static
+inline TypedValue TypedValue::MakeF32(f32 val) {
+  return TypedValue(ValueType::F32, Value(val));
+}
+
+// static
+inline TypedValue TypedValue::MakeF64(f64 val) {
+  return TypedValue(ValueType::F64, Value(val));
+}
+
+// static
+inline TypedValue TypedValue::MakeV128(v128 val) {
+  return TypedValue(ValueType::V128, Value(val));
 }
 
 //// Object ////

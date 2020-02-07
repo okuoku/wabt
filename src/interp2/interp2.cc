@@ -169,6 +169,20 @@ Result CanGrow(const Limits& limits, u32 old_size, u32 delta, u32* new_size) {
   return Result::Error;
 }
 
+//// FuncDesc ////
+
+u32 FuncDesc::GetLocalCount() const {
+  return locals.empty() ? 0 : locals.back().end;
+}
+
+ValueType FuncDesc::GetLocalType(Index index) const {
+  auto iter = std::lower_bound(
+      locals.begin(), locals.end(), index + 1,
+      [](const LocalDesc& lhs, Index rhs) { return lhs.end < rhs; });
+  assert(iter != locals.end());
+  return iter->type;
+}
+
 //// Store ////
 Store::Store() {
   Ref ref{objects_.New(new Object(ObjectKind::Null))};
@@ -814,7 +828,7 @@ void Thread::PushValues(const TypedValues& values) {
 }
 
 void Thread::PushCall(Ref func, u32 offset) {
-  frames_.emplace_back(func, offset);
+  frames_.emplace_back(func, values_.size(), offset);
 }
 
 RunResult Thread::PopCall() {
@@ -1890,10 +1904,11 @@ std::string Thread::TraceSource::Pick(Index index, Instr instr) {
   return StringPrintf("%s:%" PRIzd, reftype, val.Get<Ref>().index);
 }
 
-ValueType Thread::TraceSource::GetLocalType(Index index) {
-  // TODO: need to store information about locals in FuncDesc.
-  DefinedFunc::Ptr func{thread_->store_, thread_->frames_.back().func};
-  return ValueType::I32;
+ValueType Thread::TraceSource::GetLocalType(Index stack_slot) {
+  const Frame& frame = thread_->frames_.back();
+  DefinedFunc::Ptr func{thread_->store_, frame.func};
+  Index local_index = (thread_->values_.size() - frame.values) - stack_slot - 1;
+  return func->desc().GetLocalType(local_index);
 }
 
 ValueType Thread::TraceSource::GetGlobalType(Index index) {

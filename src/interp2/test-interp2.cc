@@ -27,19 +27,51 @@
 using namespace wabt;
 using namespace wabt::interp2;
 
-TEST(ReadModule, Empty) {
-  std::vector<u8> data = {0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00};
+class Interp2Test : public ::testing::Test {
+ protected:
+  virtual void SetUp() {}
+  virtual void TearDown() {}
 
-  Errors errors;
-  ReadBinaryOptions options;
-  ModuleDesc module;
-  Result result =
-      ReadModule(data.data(), data.size(), options, &errors, &module);
-  ASSERT_EQ(Result::Ok, result)
-      << FormatErrorsToString(errors, Location::Type::Binary);
+  void ReadModule(const std::vector<u8>& data) {
+    Errors errors;
+    ReadBinaryOptions options;
+    Result result =
+        ::ReadModule(data.data(), data.size(), options, &errors, &module_desc_);
+    ASSERT_EQ(Result::Ok, result)
+        << FormatErrorsToString(errors, Location::Type::Binary);
+  }
+
+  void Instantiate() {
+    mod_ = Module::New(store_, module_desc_);
+    RefPtr<Trap> trap;
+    inst_ = Instance::Instantiate(store_, mod_.ref(), {}, &trap);
+    ASSERT_TRUE(inst_) << trap->message();
+  }
+
+  DefinedFunc::Ptr GetFuncExport(Index index) {
+    EXPECT_LT(index, inst_->exports().size());
+    return store_.UnsafeGet<DefinedFunc>(inst_->exports()[index]);
+  }
+
+  void ExpectBufferStrEq(OutputBuffer& buf, const char* str) {
+    char buf_str[buf.size() + 1];
+    memcpy(buf_str, buf.data.data(), sizeof(buf_str));
+    buf_str[buf.size()] = 0;
+    EXPECT_STREQ(buf_str, str);
+  }
+
+  Store store_;
+  ModuleDesc module_desc_;
+  Module::Ptr mod_;
+  Instance::Ptr inst_;
+};
+
+
+TEST_F(Interp2Test, Empty) {
+  ReadModule({0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00});
 }
 
-TEST(ReadModule, MVP) {
+TEST_F(Interp2Test, MVP) {
   // (module
   //   (type (;0;) (func (param i32) (result i32)))
   //   (type (;1;) (func (param f32) (result f32)))
@@ -55,7 +87,7 @@ TEST(ReadModule, MVP) {
   //   (start 2)
   //   (elem (;0;) (i32.const 0) 0 1)
   //   (data (;0;) (i32.const 2) "hello"))
-  std::vector<u8> data = {
+  ReadModule({
       0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0e, 0x03, 0x60,
       0x01, 0x7f, 0x01, 0x7f, 0x60, 0x01, 0x7d, 0x01, 0x7d, 0x60, 0x00, 0x00,
       0x02, 0x0b, 0x01, 0x03, 0x66, 0x6f, 0x6f, 0x03, 0x62, 0x61, 0x72, 0x00,
@@ -66,27 +98,19 @@ TEST(ReadModule, MVP) {
       0x01, 0x0a, 0x0c, 0x02, 0x07, 0x00, 0x43, 0x00, 0x00, 0x28, 0x42, 0x0b,
       0x02, 0x00, 0x0b, 0x0b, 0x0b, 0x01, 0x00, 0x41, 0x02, 0x0b, 0x05, 0x68,
       0x65, 0x6c, 0x6c, 0x6f,
-  };
+  });
 
-  Errors errors;
-  ReadBinaryOptions options;
-  ModuleDesc module;
-  Result result =
-      ReadModule(data.data(), data.size(), options, &errors, &module);
-  ASSERT_EQ(Result::Ok, result)
-      << FormatErrorsToString(errors, Location::Type::Binary);
-
-  EXPECT_EQ(3u, module.func_types.size());
-  EXPECT_EQ(1u, module.imports.size());
-  EXPECT_EQ(2u, module.funcs.size());
-  EXPECT_EQ(1u, module.tables.size());
-  EXPECT_EQ(1u, module.memories.size());
-  EXPECT_EQ(1u, module.globals.size());
-  EXPECT_EQ(0u, module.events.size());
-  EXPECT_EQ(1u, module.exports.size());
-  EXPECT_EQ(1u, module.starts.size());
-  EXPECT_EQ(1u, module.elems.size());
-  EXPECT_EQ(1u, module.datas.size());
+  EXPECT_EQ(3u, module_desc_.func_types.size());
+  EXPECT_EQ(1u, module_desc_.imports.size());
+  EXPECT_EQ(2u, module_desc_.funcs.size());
+  EXPECT_EQ(1u, module_desc_.tables.size());
+  EXPECT_EQ(1u, module_desc_.memories.size());
+  EXPECT_EQ(1u, module_desc_.globals.size());
+  EXPECT_EQ(0u, module_desc_.events.size());
+  EXPECT_EQ(1u, module_desc_.exports.size());
+  EXPECT_EQ(1u, module_desc_.starts.size());
+  EXPECT_EQ(1u, module_desc_.elems.size());
+  EXPECT_EQ(1u, module_desc_.datas.size());
 }
 
 namespace {
@@ -110,26 +134,13 @@ const std::vector<u8> s_fac_module = {
     0x00, 0x41, 0x01, 0x6b, 0x21, 0x00, 0x0c, 0x00, 0x0b, 0x0b,
 };
 
-void ExpectBufferStrEq(OutputBuffer& buf, const char* str) {
-  char buf_str[buf.size() + 1];
-  memcpy(buf_str, buf.data.data(), sizeof(buf_str));
-  buf_str[buf.size()] = 0;
-  EXPECT_STREQ(buf_str, str);
-}
-
 }  // namespace
 
-TEST(ReadModule, Disassemble) {
-  Errors errors;
-  ReadBinaryOptions options;
-  ModuleDesc module;
-  Result result = ReadModule(s_fac_module.data(), s_fac_module.size(), options,
-                             &errors, &module);
-  ASSERT_EQ(Result::Ok, result)
-      << FormatErrorsToString(errors, Location::Type::Binary);
+TEST_F(Interp2Test, Disassemble) {
+  ReadModule(s_fac_module);
 
   MemoryStream stream;
-  module.istream.Disassemble(&stream);
+  module_desc_.istream.Disassemble(&stream);
   auto buf = stream.ReleaseOutputBuffer();
 
   ExpectBufferStrEq(*buf,
@@ -154,26 +165,14 @@ R"(   0| alloca 1
 )");
 }
 
-TEST(Interp, Fac) {
-  Errors errors;
-  ReadBinaryOptions options;
-  ModuleDesc module;
-  Result result = ReadModule(s_fac_module.data(), s_fac_module.size(), options,
-                             &errors, &module);
-  ASSERT_EQ(Result::Ok, result)
-      << FormatErrorsToString(errors, Location::Type::Binary);
+TEST_F(Interp2Test, Fac) {
+  ReadModule(s_fac_module);
+  Instantiate();
+  auto func = GetFuncExport(0);
 
-  Store store;
-  auto mod = Module::New(store, module);
-  RefPtr<Trap> trap;
-  auto inst = Instance::Instantiate(store, mod.ref(), {}, &trap);
-  ASSERT_TRUE(inst) << trap->message();
-  ASSERT_EQ(1u, inst->exports().size());
-
-  RefPtr<DefinedFunc> func{store, inst->exports()[0]};
   TypedValues results;
-  result = func->Call(store, {TypedValue(ValueType::I32, Value(s32(5)))},
-                      &results, &trap);
+  Trap::Ptr trap;
+  Result result = func->Call(store_, {TypedValue::MakeI32(5)}, &results, &trap);
 
   ASSERT_EQ(Result::Ok, result);
   EXPECT_EQ(1u, results.size());
@@ -181,28 +180,16 @@ TEST(Interp, Fac) {
   EXPECT_EQ(120u, results[0].value.Get<u32>());
 }
 
-TEST(Interp, Fac_Trace) {
-  Errors errors;
-  ReadBinaryOptions options;
-  ModuleDesc module;
-  Result result = ReadModule(s_fac_module.data(), s_fac_module.size(), options,
-                             &errors, &module);
-  ASSERT_EQ(Result::Ok, result)
-      << FormatErrorsToString(errors, Location::Type::Binary);
+TEST_F(Interp2Test, Fac_Trace) {
+  ReadModule(s_fac_module);
+  Instantiate();
+  auto func = GetFuncExport(0);
 
-  Store store;
-  auto mod = Module::New(store, module);
-  RefPtr<Trap> trap;
-  auto inst = Instance::Instantiate(store, mod.ref(), {}, &trap);
-  ASSERT_TRUE(inst) << trap->message();
-
-  ASSERT_EQ(1u, inst->exports().size());
-  RefPtr<DefinedFunc> func{store, inst->exports()[0]};
-
-  MemoryStream stream;
   TypedValues results;
-  result = func->Call(store, {TypedValue(ValueType::I32, Value(s32(2)))},
-                      &results, &trap, &stream);
+  Trap::Ptr trap;
+  MemoryStream stream;
+  Result result =
+      func->Call(store_, {TypedValue::MakeI32(2)}, &results, &trap, &stream);
   ASSERT_EQ(Result::Ok, result);
 
   auto buf = stream.ReleaseOutputBuffer();
@@ -241,5 +228,46 @@ R"(   0| alloca 1
   38| br @84
   84| drop_keep $2 $1
   94| return
+)");
+}
+
+TEST_F(Interp2Test, Local_Trace) {
+  // (func (export "a")
+  //   (local i32 i64 f32 f64)
+  //   (local.set 0 (i32.const 0))
+  //   (local.set 1 (i64.const 1))
+  //   (local.set 2 (f32.const 2))
+  //   (local.set 3 (f64.const 3)))
+  ReadModule({
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x04, 0x01,
+      0x60, 0x00, 0x00, 0x03, 0x02, 0x01, 0x00, 0x07, 0x05, 0x01, 0x01,
+      0x61, 0x00, 0x00, 0x0a, 0x26, 0x01, 0x24, 0x04, 0x01, 0x7f, 0x01,
+      0x7e, 0x01, 0x7d, 0x01, 0x7c, 0x41, 0x00, 0x21, 0x00, 0x42, 0x01,
+      0x21, 0x01, 0x43, 0x00, 0x00, 0x00, 0x40, 0x21, 0x02, 0x44, 0x00,
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x08, 0x40, 0x21, 0x03, 0x0b,
+  });
+
+  Instantiate();
+  auto func = GetFuncExport(0);
+
+  TypedValues results;
+  Trap::Ptr trap;
+  MemoryStream stream;
+  Result result = func->Call(store_, {}, &results, &trap, &stream);
+  ASSERT_EQ(Result::Ok, result);
+
+  auto buf = stream.ReleaseOutputBuffer();
+  ExpectBufferStrEq(*buf,
+R"(   0| alloca 4
+   6| i32.const 0
+  12| local.set $4, 0
+  18| i64.const 1
+  28| local.set $3, 1
+  34| f32.const 1073741824
+  40| local.set $2, 2
+  46| f64.const 4613937818241073152
+  56| local.set $1, 3
+  62| drop_keep $4 $0
+  72| return
 )");
 }

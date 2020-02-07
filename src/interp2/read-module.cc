@@ -420,7 +420,7 @@ Result BinaryReaderInterp::OnFunctionCount(Index count) {
 
 Result BinaryReaderInterp::OnFunction(Index index, Index sig_index) {
   FuncType& func_type = module_.func_types[sig_index];
-  module_.funcs.push_back(FuncDesc{func_type, 0});
+  module_.funcs.push_back(FuncDesc{func_type, {}, 0});
   func_types_.push_back(func_type);
   return Result::Ok;
 }
@@ -857,6 +857,8 @@ Result BinaryReaderInterp::OnLocalDecl(Index decl_index,
                                        Index count,
                                        Type type) {
   local_count_ += count;
+  func_->locals.push_back(LocalDesc{type, count, local_count_});
+
   for (Index i = 0; i < count; ++i) {
     param_and_local_types_.push_back(type);
   }
