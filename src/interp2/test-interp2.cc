@@ -263,9 +263,9 @@ R"(   0| alloca 4
   12| local.set $4, 0
   18| i64.const 1
   28| local.set $3, 1
-  34| f32.const 1073741824
+  34| f32.const 2
   40| local.set $2, 2
-  46| f64.const 4613937818241073152
+  46| f64.const 3
   56| local.set $1, 3
   62| drop_keep $4 $0
   72| return

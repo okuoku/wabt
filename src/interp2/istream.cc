@@ -599,7 +599,6 @@ Instr Istream::Read(Offset* offset) const {
       break;
 
     case Opcode::I32Const:
-    case Opcode::F32Const:
     case Opcode::InterpAlloca:
       // i32/f32 immediate, 0 operands.
       instr.kind = InstrKind::Imm_I32_Op_0;
@@ -607,10 +606,21 @@ Instr Istream::Read(Offset* offset) const {
       break;
 
     case Opcode::I64Const:
-    case Opcode::F64Const:
-      // i64/f64 immediate, 0 operands.
+      // i64 immediate, 0 operands.
       instr.kind = InstrKind::Imm_I64_Op_0;
       instr.imm_u64 = ReadAt<u64>(offset);
+      break;
+
+    case Opcode::F32Const:
+      // f32 immediate, 0 operands.
+      instr.kind = InstrKind::Imm_F32_Op_0;
+      instr.imm_f32 = ReadAt<f32>(offset);
+      break;
+
+    case Opcode::F64Const:
+      // f64 immediate, 0 operands.
+      instr.kind = InstrKind::Imm_F64_Op_0;
+      instr.imm_f64 = ReadAt<f64>(offset);
       break;
 
     case Opcode::InterpDropKeep:
@@ -795,6 +805,14 @@ Istream::Offset Istream::Trace(Stream* stream,
 
     case InstrKind::Imm_I64_Op_0:
       stream->Writef(" %" PRIu64 "\n", instr.imm_u64);
+      break;
+
+    case InstrKind::Imm_F32_Op_0:
+      stream->Writef(" %g\n", instr.imm_f32);
+      break;
+
+    case InstrKind::Imm_F64_Op_0:
+      stream->Writef(" %g\n", instr.imm_f64);
       break;
 
     case InstrKind::Imm_I32_I32_Op_0:

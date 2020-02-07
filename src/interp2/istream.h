@@ -32,6 +32,8 @@ using u8 = uint8_t;
 using u16 = uint16_t;
 using u32 = uint32_t;
 using u64 = uint64_t;
+using f32 = float;
+using f64 = double;
 using v128 = ::v128;
 
 using Buffer = std::vector<u8>;
@@ -57,6 +59,8 @@ enum class InstrKind {
   Imm_Index_Offset_Op_3,  // i32.atomic.rmw.cmpxchg
   Imm_I32_Op_0,           // i32.const
   Imm_I64_Op_0,           // i64.const
+  Imm_F32_Op_0,           // f32.const
+  Imm_F64_Op_0,           // f64.const
   Imm_I32_I32_Op_0,       // drop_keep
   Imm_I8_Op_1,            // i32x4.extract_lane
   Imm_I8_Op_2,            // i32x4.replace_lane
@@ -70,7 +74,9 @@ struct Instr {
   union {
     u8 imm_u8;
     u32 imm_u32;
+    f32 imm_f32;
     u64 imm_u64;
+    f64 imm_f64;
     v128 imm_v128;
     struct { u32 fst, snd; } imm_u32x2;
   };

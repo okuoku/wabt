@@ -1072,9 +1072,9 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
     }
 
     case O::I32Const: Push(instr.imm_u32); break;
-    case O::F32Const: Push(Bitcast<f32>(instr.imm_u32)); break;
+    case O::F32Const: Push(instr.imm_f32); break;
     case O::I64Const: Push(instr.imm_u64); break;
-    case O::F64Const: Push(Bitcast<f64>(instr.imm_u64)); break;
+    case O::F64Const: Push(instr.imm_f64); break;
 
     case O::I32Eqz: return DoUnop(IntEqz<u32>);
     case O::I32Eq:  return DoBinop(Eq<u32>);
