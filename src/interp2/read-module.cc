@@ -470,7 +470,7 @@ ValueType BinaryReaderInterp::GetType(InitExpr init) {
     case InitExprKind::F32:        return ValueType::F32;
     case InitExprKind::F64:        return ValueType::F64;
     case InitExprKind::V128:       return ValueType::V128;
-    case InitExprKind::GlobalGet:  return global_types_[init.index].type;
+    case InitExprKind::GlobalGet:  return global_types_[init.index_].type;
     case InitExprKind::RefNull:    return ValueType::Nullref;
     case InitExprKind::RefFunc:    return ValueType::Funcref;
     default: WABT_UNREACHABLE;
@@ -493,21 +493,21 @@ Result BinaryReaderInterp::EndGlobalInitExpr(Index index) {
 Result BinaryReaderInterp::OnInitExprF32ConstExpr(Index index,
                                                   uint32_t value_bits) {
   init_expr_.kind = InitExprKind::F32;
-  init_expr_.f32 = Bitcast<f32>(value_bits);
+  init_expr_.f32_ = Bitcast<f32>(value_bits);
   return Result::Ok;
 }
 
 Result BinaryReaderInterp::OnInitExprF64ConstExpr(Index index,
                                                   uint64_t value_bits) {
   init_expr_.kind = InitExprKind::F64;
-  init_expr_.f64 = Bitcast<f64>(value_bits);
+  init_expr_.f64_ = Bitcast<f64>(value_bits);
   return Result::Ok;
 }
 
 Result BinaryReaderInterp::OnInitExprV128ConstExpr(Index index,
                                                    ::v128 value_bits) {
   init_expr_.kind = InitExprKind::V128;
-  init_expr_.v128 = Bitcast<v128>(value_bits);
+  init_expr_.v128_ = Bitcast<v128>(value_bits);
   return Result::Ok;
 }
 
@@ -523,19 +523,19 @@ Result BinaryReaderInterp::OnInitExprGlobalGetExpr(Index index,
   }
 
   init_expr_.kind = InitExprKind::GlobalGet;
-  init_expr_.index = global_index;
+  init_expr_.index_ = global_index;
   return Result::Ok;
 }
 
 Result BinaryReaderInterp::OnInitExprI32ConstExpr(Index index, uint32_t value) {
   init_expr_.kind = InitExprKind::I32;
-  init_expr_.i32 = value;
+  init_expr_.i32_ = value;
   return Result::Ok;
 }
 
 Result BinaryReaderInterp::OnInitExprI64ConstExpr(Index index, uint64_t value) {
   init_expr_.kind = InitExprKind::I64;
-  init_expr_.i64 = value;
+  init_expr_.i64_ = value;
   return Result::Ok;
 }
 
@@ -546,7 +546,7 @@ Result BinaryReaderInterp::OnInitExprRefNull(Index index) {
 
 Result BinaryReaderInterp::OnInitExprRefFunc(Index index, Index func_index) {
   init_expr_.kind = InitExprKind::RefFunc;
-  init_expr_.index = index;
+  init_expr_.index_ = index;
   return Result::Ok;
 }
 

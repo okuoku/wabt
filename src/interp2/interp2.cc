@@ -524,18 +524,18 @@ Result Memory::Copy(Memory& dst,
 Value Instance::ResolveInitExpr(Store& store, InitExpr init) {
   Value result;
   switch (init.kind) {
-    case InitExprKind::I32:      result.Set(init.i32); break;
-    case InitExprKind::I64:      result.Set(init.i64); break;
-    case InitExprKind::F32:      result.Set(init.f32); break;
-    case InitExprKind::F64:      result.Set(init.f64); break;
-    case InitExprKind::V128:     result.Set(init.v128); break;
+    case InitExprKind::I32:      result.Set(init.i32_); break;
+    case InitExprKind::I64:      result.Set(init.i64_); break;
+    case InitExprKind::F32:      result.Set(init.f32_); break;
+    case InitExprKind::F64:      result.Set(init.f64_); break;
+    case InitExprKind::V128:     result.Set(init.v128_); break;
     case InitExprKind::GlobalGet: {
-      Global::Ptr global{store, globals_[init.index]};
+      Global::Ptr global{store, globals_[init.index_]};
       result = global->Get();
       break;
     }
     case InitExprKind::RefFunc: {
-      result.Set(funcs_[init.index]);
+      result.Set(funcs_[init.index_]);
       break;
     }
     case InitExprKind::RefNull:

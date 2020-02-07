@@ -103,12 +103,12 @@ enum class InitExprKind {
 struct InitExpr {
   InitExprKind kind;
   union {
-    u32 i32;
-    u64 i64;
-    f32 f32;
-    f64 f64;
-    v128 v128;
-    Index index;
+    u32 i32_;
+    u64 i64_;
+    f32 f32_;
+    f64 f64_;
+    v128 v128_;
+    Index index_;
   };
 };
 
