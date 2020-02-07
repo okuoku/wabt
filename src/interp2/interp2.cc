@@ -1390,7 +1390,6 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
     case O::I8X16Sub:          return DoSimdBinop<u8x16>(Sub<u8>);
     case O::I8X16SubSaturateS: return DoSimdBinop<u8x16>(IntSubSat<s8>);
     case O::I8X16SubSaturateU: return DoSimdBinop<u8x16>(IntSubSat<u8>);
-    case O::I8X16Mul:          return DoSimdBinop<u8x16>(Mul<u8>);
 
     case O::I16X8Neg:          return DoSimdUnop<u16x8>(Neg<u16>);
     case O::I16X8AnyTrue:      return DoSimdIsTrue<u16x8, 1>();
@@ -1417,8 +1416,6 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
     case O::I32X4Mul:          return DoSimdBinop<u32x4>(Mul<u32>);
 
     case O::I64X2Neg:          return DoSimdUnop<u64x2>(Neg<u64>);
-    case O::I64X2AnyTrue:      return DoSimdIsTrue<u64x2, 1>();
-    case O::I64X2AllTrue:      return DoSimdIsTrue<u64x2, 2>();
     case O::I64X2Shl:          return DoSimdShift<u64x2>(IntShl<u64>);
     case O::I64X2ShrS:         return DoSimdShift<u64x2>(IntShr<s64>);
     case O::I64X2ShrU:         return DoSimdShift<u64x2>(IntShr<u64>);
@@ -1447,20 +1444,16 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
 
     case O::I32X4TruncSatF32X4S: return DoSimdUnop<s32x4>(IntTruncSat<s32, f32>);
     case O::I32X4TruncSatF32X4U: return DoSimdUnop<u32x4>(IntTruncSat<u32, f32>);
-    case O::I64X2TruncSatF64X2S: return DoSimdUnop<s64x2>(IntTruncSat<s64, f64>);
-    case O::I64X2TruncSatF64X2U: return DoSimdUnop<u64x2>(IntTruncSat<u64, f64>);
     case O::F32X4ConvertI32X4S:  return DoSimdUnop<f32x4>(Convert<f32, s32>);
     case O::F32X4ConvertI32X4U:  return DoSimdUnop<f32x4>(Convert<f32, u32>);
-    case O::F64X2ConvertI64X2S:  return DoSimdUnop<f64x2>(Convert<f64, s64>);
-    case O::F64X2ConvertI64X2U:  return DoSimdUnop<f64x2>(Convert<f64, u64>);
 
     case O::V8X16Swizzle:     return DoSimdSwizzle();
     case O::V8X16Shuffle:     return DoSimdShuffle(instr);
 
-    case O::I8X16LoadSplat:   return DoSimdLoadSplat<u8x16, u32>(instr, out_trap);
-    case O::I16X8LoadSplat:   return DoSimdLoadSplat<u16x8, u32>(instr, out_trap);
-    case O::I32X4LoadSplat:   return DoSimdLoadSplat<u32x4, u32>(instr, out_trap);
-    case O::I64X2LoadSplat:   return DoSimdLoadSplat<u64x2, u64>(instr, out_trap);
+    case O::V8X16LoadSplat:   return DoSimdLoadSplat<u8x16, u32>(instr, out_trap);
+    case O::V16X8LoadSplat:   return DoSimdLoadSplat<u16x8, u32>(instr, out_trap);
+    case O::V32X4LoadSplat:   return DoSimdLoadSplat<u32x4, u32>(instr, out_trap);
+    case O::V64X2LoadSplat:   return DoSimdLoadSplat<u64x2, u64>(instr, out_trap);
 
     case O::I8X16NarrowI16X8S:    return DoSimdNarrow<s8x16, s16x8>();
     case O::I8X16NarrowI16X8U:    return DoSimdNarrow<u8x16, u16x8>();
