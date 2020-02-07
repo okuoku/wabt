@@ -201,8 +201,21 @@ RefPtr<T>& RefPtr<T>::operator=(RefPtr&& other) {
 
 template <typename T>
 RefPtr<T>::~RefPtr() {
+  reset();
+}
+
+template <typename T>
+bool RefPtr<T>::empty() const {
+  return obj_ != nullptr;
+}
+
+template <typename T>
+void RefPtr<T>::reset() {
   if (obj_) {
     store_->DeleteRoot(root_index_);
+    obj_ = nullptr;
+    root_index_ = 0;
+    store_ = nullptr;
   }
 }
 
@@ -351,45 +364,6 @@ RefPtr<T> Store::Alloc(Args&&... args) {
   return ptr;
 }
 
-//// TypedValue ////
-inline TypedValue::TypedValue(ValueType type, Value value)
-    : type(type), value(value) {
-  // Use the constructor with Store instead when creating a reference.
-  assert(!IsReference(type));
-}
-
-inline TypedValue::TypedValue(Store& store, ValueType type, Value value)
-    : type(type), value(value) {
-  if (IsReference(type)) {
-    ref = Object::Ptr(store, value.ref_);
-  }
-}
-
-// static
-inline TypedValue TypedValue::MakeI32(u32 val) {
-  return TypedValue(ValueType::I32, Value(val));
-}
-
-// static
-inline TypedValue TypedValue::MakeI64(u64 val) {
-  return TypedValue(ValueType::I64, Value(val));
-}
-
-// static
-inline TypedValue TypedValue::MakeF32(f32 val) {
-  return TypedValue(ValueType::F32, Value(val));
-}
-
-// static
-inline TypedValue TypedValue::MakeF64(f64 val) {
-  return TypedValue(ValueType::F64, Value(val));
-}
-
-// static
-inline TypedValue TypedValue::MakeV128(v128 val) {
-  return TypedValue(ValueType::V128, Value(val));
-}
-
 //// Object ////
 // static
 inline bool Object::classof(const Object* obj) {
@@ -468,7 +442,7 @@ inline bool Func::classof(const Object* obj) {
   }
 }
 
-inline const FuncType& Func::func_type() {
+inline const FuncType& Func::func_type() const {
   return type_;
 }
 

@@ -317,8 +317,8 @@ Result DefinedFunc::Match(Store& store,
 }
 
 Result DefinedFunc::Call(Store& store,
-                         const TypedValues& params,
-                         TypedValues* out_results,
+                         const Values& params,
+                         Values& results,
                          Trap::Ptr* out_trap,
                          Stream* trace_stream) {
   Thread::Options options;
@@ -326,13 +326,13 @@ Result DefinedFunc::Call(Store& store,
 
   Thread::Ptr thread = Thread::New(store, options);
   assert(params.size() == type_.params.size());
-  thread->PushValues(params);
-  thread->PushCall(self_, desc_.code_offset);
+  thread->PushValues(type_.params, params);
+  thread->PushCall(*this);
   RunResult result = thread->Run(out_trap);
   if (result == RunResult::Trap) {
     return Result::Error;
   }
-  thread->CopyValues(type_.results, out_results);
+  thread->PopValues(type_.results, &results);
   return Result::Ok;
 }
 
@@ -349,12 +349,12 @@ Result HostFunc::Match(Store& store,
 }
 
 Result HostFunc::Call(Store& store,
-                      const TypedValues& params,
-                      TypedValues* out_results,
+                      const Values& params,
+                      Values& results,
                       Trap::Ptr* out_trap,
                       Stream*) {
   std::string msg;
-  Result result = callback_(params, out_results, &msg, user_data_);
+  Result result = callback_(params, results, &msg, user_data_);
   if (Failed(result)) {
     *out_trap = Trap::New(store, msg);
   }
@@ -775,8 +775,8 @@ Instance::Ptr Instance::Instantiate(Store& store,
   // Start.
   for (auto&& start : mod->desc().starts) {
     Func::Ptr func{store, inst->funcs_[start.func_index]};
-    TypedValues results;
-    if (Failed(func->Call(store, {}, &results, out_trap))) {
+    Values results;
+    if (Failed(func->Call(store, {}, results, out_trap))) {
       return {};
     }
   }
@@ -818,12 +818,13 @@ void Thread::Mark(Store& store) {
   }
 }
 
-void Thread::PushValues(const TypedValues& values) {
-  for (auto&& value: values) {
-    if (IsReference(value.type)) {
+void Thread::PushValues(const ValueTypes& types, const Values& values) {
+  assert(types.size() == values.size());
+  for (size_t i = 0; i < types.size(); ++i) {
+    if (IsReference(types[i])) {
       refs_.push_back(values_.size());
     }
-    values_.push_back(value.value);
+    values_.push_back(values[i]);
   }
 }
 
@@ -831,10 +832,31 @@ void Thread::PushCall(Ref func, u32 offset) {
   frames_.emplace_back(func, values_.size(), offset);
 }
 
+void Thread::PushCall(const DefinedFunc& func) {
+  PushCall(func.self(), func.desc().code_offset);
+  inst_ = store_.UnsafeGet<Instance>(func.instance());
+  mod_ = store_.UnsafeGet<Module>(inst_->module());
+}
+
+void Thread::PushCall(const HostFunc& func) {
+  PushCall(func.self(), 0);
+  inst_.reset();
+  mod_.reset();
+}
+
 RunResult Thread::PopCall() {
+  inst_.reset();
+  mod_.reset();
   frames_.pop_back();
   if (frames_.empty()) {
     return RunResult::Return;
+  }
+
+  // TODO: cache inst_ and mod_ in the frame?
+  auto func = store_.UnsafeGet<Func>(frames_.back().func);
+  if (auto* defined_func = dyn_cast<DefinedFunc>(func.get())) {
+    inst_ = store_.UnsafeGet<Instance>(defined_func->instance());
+    mod_ = store_.UnsafeGet<Module>(inst_->module());
   }
   return RunResult::Ok;
 }
@@ -844,13 +866,11 @@ RunResult Thread::DoReturnCall(const Func::Ptr& func, Trap::Ptr* out_trap) {
   return RunResult::Ok;
 }
 
-void Thread::CopyValues(const ValueTypes& types, TypedValues* out_values) {
-  assert(values_.size() == types.size());
-  out_values->clear();
-  out_values->reserve(values_.size());
-  for (size_t i = 0; i < values_.size(); ++i) {
-    out_values->emplace_back(store_, types[i], values_[i]);
-  }
+void Thread::PopValues(const ValueTypes& types, Values* out_values) {
+  assert(values_.size() >= types.size());
+  out_values->resize(types.size());
+  std::copy(values_.end() - types.size(), values_.end(), out_values->begin());
+  values_.resize(values_.size() - types.size());
 }
 
 RunResult Thread::Run(Trap::Ptr* out_trap) {
@@ -864,8 +884,6 @@ RunResult Thread::Run(Trap::Ptr* out_trap) {
 
 RunResult Thread::Run(int num_instructions, Trap::Ptr* out_trap) {
   DefinedFunc::Ptr func{store_, frames_.back().func};
-  inst_ = store_.UnsafeGet<Instance>(func->instance());
-  mod_ = store_.UnsafeGet<Module>(inst_->module());
   for (;num_instructions > 0; --num_instructions) {
     auto result = StepInternal(out_trap);
     if (result != RunResult::Ok) {
@@ -877,8 +895,6 @@ RunResult Thread::Run(int num_instructions, Trap::Ptr* out_trap) {
 
 RunResult Thread::Step(Trap::Ptr* out_trap) {
   DefinedFunc::Ptr func{store_, frames_.back().func};
-  inst_ = store_.UnsafeGet<Instance>(func->instance());
-  mod_ = store_.UnsafeGet<Module>(inst_->module());
   return StepInternal(out_trap);
 }
 
@@ -1496,12 +1512,23 @@ RunResult Thread::StepInternal(Trap::Ptr* out_trap) {
 }
 
 RunResult Thread::DoCall(const Func::Ptr& func, Trap::Ptr* out_trap) {
-  // TODO update inst_ and mod_
   if (auto* host_func = dyn_cast<HostFunc>(func.get())) {
-    // TODO
+    auto& func_type = host_func->func_type();
+
+    Values params;
+    PopValues(func_type.params, &params);
+    PushCall(*host_func);
+
+    std::string msg;
+    Values results(func_type.results.size());
+    TRAP_IF(Failed(host_func->callback_(params, results, &msg,
+                                        host_func->user_data_)),
+            StringPrintf("host function trapped: %s", msg.c_str()));
+
+    PopCall();
+    PushValues(func_type.results, results);
   } else {
-    auto* defined_func = cast<DefinedFunc>(func.get());
-    PushCall(defined_func->self(), defined_func->desc().code_offset);
+    PushCall(*cast<DefinedFunc>(func.get()));
   }
   return RunResult::Ok;
 }

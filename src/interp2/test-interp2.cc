@@ -28,7 +28,7 @@ using namespace wabt;
 using namespace wabt::interp2;
 
 class Interp2Test : public ::testing::Test {
- protected:
+ public:
   virtual void SetUp() {}
   virtual void TearDown() {}
 
@@ -41,10 +41,10 @@ class Interp2Test : public ::testing::Test {
         << FormatErrorsToString(errors, Location::Type::Binary);
   }
 
-  void Instantiate() {
+  void Instantiate(const RefVec& imports = RefVec{}) {
     mod_ = Module::New(store_, module_desc_);
     RefPtr<Trap> trap;
-    inst_ = Instance::Instantiate(store_, mod_.ref(), {}, &trap);
+    inst_ = Instance::Instantiate(store_, mod_.ref(), imports, &trap);
     ASSERT_TRUE(inst_) << trap->message();
   }
 
@@ -170,14 +170,13 @@ TEST_F(Interp2Test, Fac) {
   Instantiate();
   auto func = GetFuncExport(0);
 
-  TypedValues results;
+  Values results;
   Trap::Ptr trap;
-  Result result = func->Call(store_, {TypedValue::MakeI32(5)}, &results, &trap);
+  Result result = func->Call(store_, {Value(5)}, results, &trap);
 
   ASSERT_EQ(Result::Ok, result);
   EXPECT_EQ(1u, results.size());
-  EXPECT_EQ(ValueType::I32, results[0].type);
-  EXPECT_EQ(120u, results[0].value.Get<u32>());
+  EXPECT_EQ(120u, results[0].Get<u32>());
 }
 
 TEST_F(Interp2Test, Fac_Trace) {
@@ -185,11 +184,10 @@ TEST_F(Interp2Test, Fac_Trace) {
   Instantiate();
   auto func = GetFuncExport(0);
 
-  TypedValues results;
+  Values results;
   Trap::Ptr trap;
   MemoryStream stream;
-  Result result =
-      func->Call(store_, {TypedValue::MakeI32(2)}, &results, &trap, &stream);
+  Result result = func->Call(store_, {Value(2)}, results, &trap, &stream);
   ASSERT_EQ(Result::Ok, result);
 
   auto buf = stream.ReleaseOutputBuffer();
@@ -250,10 +248,10 @@ TEST_F(Interp2Test, Local_Trace) {
   Instantiate();
   auto func = GetFuncExport(0);
 
-  TypedValues results;
+  Values results;
   Trap::Ptr trap;
   MemoryStream stream;
-  Result result = func->Call(store_, {}, &results, &trap, &stream);
+  Result result = func->Call(store_, {}, results, &trap, &stream);
   ASSERT_EQ(Result::Ok, result);
 
   auto buf = stream.ReleaseOutputBuffer();
@@ -270,4 +268,83 @@ R"(   0| alloca 4
   62| drop_keep $4 $0
   72| return
 )");
+}
+
+TEST_F(Interp2Test, HostFunc) {
+  // (import "" "f" (func $f (param i32) (result i32)))
+  // (func (export "g") (result i32)
+  //   (call $f (i32.const 1)))
+  ReadModule({
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x0a,
+      0x02, 0x60, 0x01, 0x7f, 0x01, 0x7f, 0x60, 0x00, 0x01, 0x7f,
+      0x02, 0x06, 0x01, 0x00, 0x01, 0x66, 0x00, 0x00, 0x03, 0x02,
+      0x01, 0x01, 0x07, 0x05, 0x01, 0x01, 0x67, 0x00, 0x01, 0x0a,
+      0x08, 0x01, 0x06, 0x00, 0x41, 0x01, 0x10, 0x00, 0x0b,
+  });
+
+  auto host_func = HostFunc::New(
+      store_, FuncType{{ValueType::I32}, {ValueType::I32}},
+      [](const Values& params, Values& results, std::string* out_msg,
+         void* user_data) -> Result {
+        results[0] = Value(params[0].Get<u32>() + 1);
+        return Result::Ok;
+      },
+      nullptr);
+
+  Instantiate({host_func->self()});
+
+  Values results;
+  Trap::Ptr trap;
+  Result result = GetFuncExport(0)->Call(store_, {}, results, &trap);
+
+  ASSERT_EQ(Result::Ok, result);
+  EXPECT_EQ(1u, results.size());
+  EXPECT_EQ(2u, results[0].Get<u32>());
+}
+
+TEST_F(Interp2Test, HostFunc_PingPong) {
+  // (import "" "f" (func $f (param i32) (result i32)))
+  // (func (export "g") (param i32) (result i32)
+  //   (call $f (i32.add (local.get 0) (i32.const 1))))
+  ReadModule({
+      0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00, 0x01, 0x06, 0x01, 0x60,
+      0x01, 0x7f, 0x01, 0x7f, 0x02, 0x06, 0x01, 0x00, 0x01, 0x66, 0x00, 0x00,
+      0x03, 0x02, 0x01, 0x00, 0x07, 0x05, 0x01, 0x01, 0x67, 0x00, 0x01, 0x0a,
+      0x0b, 0x01, 0x09, 0x00, 0x20, 0x00, 0x41, 0x01, 0x6a, 0x10, 0x00, 0x0b,
+  });
+
+  auto host_func = HostFunc::New(
+      store_, FuncType{{ValueType::I32}, {ValueType::I32}},
+      [](const Values& params, Values& results, std::string* out_msg,
+         void* user_data) -> Result {
+        Interp2Test* self = static_cast<Interp2Test*>(user_data);
+        auto val = params[0].Get<u32>();
+        if (val < 10) {
+          Trap::Ptr trap;
+          // TODO: this creates a new thread; add a new API to reuse the
+          // existing thread somehow.
+          if (Failed(self->GetFuncExport(0)->Call(
+                  self->store_, {Value(val * 2)}, results, &trap))) {
+            *out_msg = trap->message();
+            return Result::Error;
+          }
+          return Result::Ok;
+        }
+        results[0] = Value(val);
+        return Result::Ok;
+      },
+      this);
+
+  Instantiate({host_func->self()});
+
+  // Should produce the following calls:
+  //  g(1) -> f(2) -> g(4) -> f(5) -> g(10) -> f(11) -> return 11
+
+  Values results;
+  Trap::Ptr trap;
+  Result result = GetFuncExport(0)->Call(store_, {Value(1)}, results, &trap);
+
+  ASSERT_EQ(Result::Ok, result);
+  EXPECT_EQ(1u, results.size());
+  EXPECT_EQ(11u, results[0].Get<u32>());
 }

@@ -39,6 +39,7 @@ class Trap;
 class DataSegment;
 class ElemSegment;
 class Instance;
+class Thread;
 template <typename T> class RefPtr;
 
 using s8 = int8_t;
@@ -432,6 +433,9 @@ class RefPtr {
   RefPtr& operator=(RefPtr&&);
   ~RefPtr();
 
+  bool empty() const;
+  void reset();
+
   T* get();
   T* operator->();
   T& operator*();
@@ -474,22 +478,7 @@ union Value {
   v128 v128_;
   Ref ref_;
 };
-
-struct TypedValue {
-  explicit TypedValue(ValueType, Value);
-  explicit TypedValue(Store&, ValueType, Value);
-
-  static TypedValue MakeI32(u32);
-  static TypedValue MakeI64(u64);
-  static TypedValue MakeF32(f32);
-  static TypedValue MakeF64(f64);
-  static TypedValue MakeV128(v128);
-
-  ValueType type;
-  Value value;
-  RefPtr<Object> ref;
-};
-using TypedValues = std::vector<TypedValue>;
+using Values = std::vector<Value>;
 
 using Finalizer = void (*)(void* user_data);
 
@@ -582,12 +571,12 @@ class Func : public Extern {
   using Ptr = RefPtr<Func>;
 
   virtual Result Call(Store&,
-                      const TypedValues& params,
-                      TypedValues* out_results,
+                      const Values& params,
+                      Values& results,
                       Trap::Ptr* out_trap,
                       Stream* = nullptr) = 0;
 
-  const FuncType& func_type();
+  const FuncType& func_type() const;
 
  protected:
   explicit Func(ObjectKind, FuncType);
@@ -606,8 +595,8 @@ class DefinedFunc : public Func {
   Result Match(Store&, const ImportType&, Trap::Ptr* out_trap) override;
 
   Result Call(Store&,
-              const TypedValues& params,
-              TypedValues* out_results,
+              const Values& params,
+              Values& results,
               Trap::Ptr* out_trap,
               Stream* = nullptr) override;
 
@@ -629,8 +618,8 @@ class HostFunc : public Func {
   static const ObjectKind skind = ObjectKind::HostFunc;
   using Ptr = RefPtr<HostFunc>;
 
-  using Callback = Result (*)(const TypedValues& params,
-                              TypedValues* out_results,
+  using Callback = Result (*)(const Values& params,
+                              Values& results,
                               std::string* out_msg,
                               void* user_data);
 
@@ -639,13 +628,14 @@ class HostFunc : public Func {
   Result Match(Store&, const ImportType&, Trap::Ptr* out_trap) override;
 
   Result Call(Store&,
-              const TypedValues& params,
-              TypedValues* out_results,
+              const Values& params,
+              Values& results,
               Trap::Ptr* out_trap,
               Stream* = nullptr) override;
 
  private:
   friend Store;
+  friend Thread;
   explicit HostFunc(Store&, FuncType, Callback, void* user_data);
   void Mark(Store&) override;
 
@@ -928,12 +918,14 @@ class Thread : public Object {
   void Mark(Store&) override;
 
   void PushCall(Ref func, u32 offset);
+  void PushCall(const DefinedFunc&);
+  void PushCall(const HostFunc&);
   RunResult PopCall();
   RunResult DoCall(const Func::Ptr&, Trap::Ptr* out_trap);
   RunResult DoReturnCall(const Func::Ptr&, Trap::Ptr* out_trap);
 
-  void PushValues(const TypedValues&);
-  void CopyValues(const ValueTypes&, TypedValues*);
+  void PushValues(const ValueTypes&, const Values&);
+  void PopValues(const ValueTypes&, Values*);
 
   Value& Pick(Index);
 
