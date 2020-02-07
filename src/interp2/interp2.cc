@@ -803,8 +803,8 @@ Thread::Thread(Store& store, const Options& options)
     : Object(skind), store_(store) {
   frames_.reserve(options.call_stack_size);
   values_.reserve(options.value_stack_size);
+  trace_stream_ = options.trace_stream;
   if (options.trace_stream) {
-    trace_stream_ = options.trace_stream;
     trace_source_ = new TraceSource(this);
   }
 }
