@@ -330,6 +330,9 @@ else ()
 endif ()
 set_target_properties(wasm PROPERTIES CXX_VISIBILITY_PRESET hidden)
 
+add_library(wasm_static STATIC ${WABT_LIBRARY_SRC} src/interp/interp-wasm-c-api.cc)
+target_include_directories(wasm_static PUBLIC third_party/wasm-c-api/include)
+
 if (NOT EMSCRIPTEN)
   if (CODE_COVERAGE)
     add_definitions("-fprofile-arcs -ftest-coverage")
